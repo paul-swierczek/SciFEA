@@ -290,8 +290,8 @@ Mesh_types = {
 # Kolejność stopnii swobody:
 DOF_ORDER = ["UX", "UY", "UZ", "RX", "RY", "RZ"]
 # Lokalizacje folderów:
-FOLDER_PATH = r"C:\Users\Dell\Desktop\8 SEM xd\MESowanie\Kombinowanie\Nauka pytona\Bibolioteki matematyczne\SymPY\Mesh"
-FOLDER_PATH_LOAD = r"C:\Users\Dell\Desktop\8 SEM xd\MESowanie\Kombinowanie\Nauka pytona\Bibolioteki matematyczne\SymPY\Load"
+FOLDER_PATH = os.path.dirname(__file__)
+FOLDER_PATH_LOAD = os.path.join(FOLDER_PATH, r"Loads")
 # ==========================================
 # STREFA 2: FUNKCJE (MODUŁY SOLVERA)
 # ==========================================
