@@ -9,7 +9,8 @@ Unlike commercial black-box solvers that operate exclusively on floating-point n
 > **Project Status:** Active development (B.Sc. Engineering Thesis at Warsaw University of Technology, Faculty of Power and Aeronautical Engineering — MEiL). The geometric pre-processor, data validation engine, and visualization canvas are complete; numerical and symbolic solver modules are currently being integrated.
 
 ---
-
+## Random screenshots
+![Main page (welcome page)](src/screenshots/main_page - mesh editor.png)
 ## Key Features
 
 ### 1. Controlled Degree of Symbolicity (Hybrid Mode)
