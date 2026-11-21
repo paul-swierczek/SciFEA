@@ -15,13 +15,13 @@ Unlike commercial black-box solvers that operate exclusively on floating-point n
 ![Main page (welcome page)](src/screenshots/main_page%20-%20mesh%20editor.png)
 
 ### Cross Section Manager
-![Cross section manager](screenshots/Cross%20section%20manager.png)
+![Cross section manager](src/screenshots/Cross%20section%20manager.png)
 
 ### Element Load Editor – Piecewise
-![Element load editor - piecewise](screenshots/element%20load%20editor%20-%20piecewise.png)
+![Element load editor - piecewise](src/screenshots/element%20load%20editor%20-%20piecewise.png)
 
 ### Element Load Editor – Polynomial Bezier
-![Element load editor - polynomial bezier](screenshots/element%20load%20editor%20-%20polynomial%20bezier.png)
+![Element load editor - polynomial bezier](src/screenshots/element%20load%20editor%20-%20polynomial%20bezier.png)
 
 ### 1. Controlled Degree of Symbolicity (Hybrid Mode)
 Purely symbolic FEA quickly suffers from expression swell as the number of degrees of freedom grows. SciFEA solves this by introducing selective symbol substitution:
