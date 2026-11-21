@@ -10,7 +10,7 @@ Unlike commercial black-box solvers that operate exclusively on floating-point n
 
 ---
 ## Random screenshots
-![Main page (welcome page)](src/screenshots/main_page - mesh editor.png)
+![Main page (welcome page)](src/screenshots/main_page%20-%20mesh editor.png)
 ## Key Features
 
 ### 1. Controlled Degree of Symbolicity (Hybrid Mode)
