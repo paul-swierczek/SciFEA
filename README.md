@@ -12,7 +12,7 @@ Unlike commercial black-box solvers that operate exclusively on floating-point n
 ## Random screenshots
 
 ### Main Page – Mesh Editor
-![Main page (welcome page)](screenshots/main_page%20-%20mesh%20editor.png)
+![Main page (welcome page)](src/screenshots/main_page%20-%20mesh%20editor.png)
 
 ### Cross Section Manager
 ![Cross section manager](screenshots/Cross%20section%20manager.png)
