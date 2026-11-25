@@ -1,0 +1,67 @@
+<svg class="light" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1038.81 260.7" width="1038.81" height="260.7" id="m35f1d7__root" data-diagram-type="flowchart">
+  <style data-mercat-style="universal">.mercat text{font-family:'Google Sans',Roboto,Arial,sans-serif;fill:var(--m-text);dominant-baseline:central}.mercat .m-node .m-shape{fill:var(--m-node-fill);stroke:var(--m-node-stroke);stroke-width:1.5px}.mercat .m-edge .m-path{fill:none;stroke:var(--m-line);stroke-width:1.5px}.mercat .t-label{font-size:13px;font-weight:500}</style>
+  <style data-mercat-style="theme-light">#m35f1d7__root{--m-text:#1f1f1f;--m-line:#545454;--m-node-fill:#f8f9fa;--m-node-stroke:#747775}</style>
+  <style data-mercat-style="theme-dark">#m35f1d7__root.dark{--m-text:#e3e3e3;--m-line:#bfbfbf;--m-node-fill:#2d2e30;--m-node-stroke:#8e918f}</style>
+  <g class="mercat mercat-flowchart" transform="translate(190.95, -35)">
+    <defs>
+      <marker id="m35f1d7__mk-arrow" refX="9.45" refY="3.4" markerWidth="10.8" markerHeight="6.8" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+        <path d="M 0 0 L 10.8 3.4 L 0 6.8 Z" class="m-marker" fill="var(--m-line)" stroke="none"/>
+      </marker>
+    </defs>
+    <g class="m-node m-edge" id="m35f1d7__edge__SciFEA_5fmain_2epy__elements_2epy__0" data-role="connector">
+      <path d="M 594.97 86.9 L 594.97 104.64 Q 594.97 110.64, 600.97 110.64 L 826.86 110.64 Q 832.86 110.64, 832.86 116.64 L 832.86 256.25 Q 832.86 262.25, 826.86 262.25 L 255.43 262.25" class="m-path" marker-end="url(#m35f1d7__mk-arrow)"/>
+    </g>
+    <g class="m-node m-edge" id="m35f1d7__edge__SciFEA_5fmain_2epy__symbolic_5fsolver_2epy__0" data-role="connector">
+      <path d="M 518.84 86.9 L 518.84 100.9 Q 518.84 106.9, 512.84 106.9 L -95.51 106.9 Q -101.51 106.9, -101.51 112.9 L -101.51 145.55" class="m-path" marker-end="url(#m35f1d7__mk-arrow)"/>
+    </g>
+    <g class="m-node m-edge" id="m35f1d7__edge__SciFEA_5fmain_2epy__numerical_5fsolver_2epy__0" data-role="connector">
+      <path d="M 534.06 86.9 L 534.06 110.9 Q 534.06 116.9, 528.06 116.9 L 96.03 116.9 Q 90.03 116.9, 90.03 122.9 L 90.03 145.55" class="m-path" marker-end="url(#m35f1d7__mk-arrow)"/>
+    </g>
+    <g class="m-node m-edge" id="m35f1d7__edge__SciFEA_5fmain_2epy__post_5fprocessor_5ffunctions_2epy__0" data-role="connector">
+      <path d="M 549.29 86.9 L 549.29 120.9 Q 549.29 126.9, 543.29 126.9 L 318.71 126.9 Q 312.71 126.9, 312.71 132.9 L 312.71 145.55" class="m-path" marker-end="url(#m35f1d7__mk-arrow)"/>
+    </g>
+    <g class="m-node m-edge" id="m35f1d7__edge__SciFEA_5fmain_2epy__function_5fbuilder_2epy__0" data-role="connector">
+      <path d="M 564.52 86.9 L 564.52 145.55" class="m-path" marker-end="url(#m35f1d7__mk-arrow)"/>
+    </g>
+    <g class="m-node m-edge" id="m35f1d7__edge__SciFEA_5fmain_2epy__dialog_5fhelpers_2epy__0" data-role="connector">
+      <path d="M 579.75 86.9 L 579.75 110.9 Q 579.75 116.9, 585.75 116.9 L 712.16 116.9 Q 718.16 116.9, 718.16 122.9 L 718.16 145.55" class="m-path" marker-end="url(#m35f1d7__mk-arrow)"/>
+    </g>
+    <g class="m-node m-edge" id="m35f1d7__edge__symbolic_5fsolver_2epy__elements_2epy__0" data-role="connector">
+      <path d="M -101.51 183.8 L -101.51 214.8 Q -101.51 220.8, -95.51 220.8 L 175.01 220.8 Q 181.01 220.8, 181.01 226.8 L 181.01 242.45" class="m-path" marker-end="url(#m35f1d7__mk-arrow)"/>
+    </g>
+    <g class="m-node m-edge" id="m35f1d7__edge__numerical_5fsolver_2epy__elements_2epy__0" data-role="connector">
+      <path d="M 90.03 183.8 L 90.03 200.8 Q 90.03 206.8, 96.03 206.8 L 195.37 206.8 Q 201.37 206.8, 201.37 212.8 L 201.37 242.45" class="m-path" marker-end="url(#m35f1d7__mk-arrow)"/>
+    </g>
+    <g class="m-node m-edge" id="m35f1d7__edge__post_5fprocessor_5ffunctions_2epy__elements_2epy__0" data-role="connector">
+      <path d="M 221.72 183.8 L 221.72 242.45" class="m-path" marker-end="url(#m35f1d7__mk-arrow)"/>
+    </g>
+    <g class="m-node m-node--rect" id="m35f1d7__node__SciFEA_5fmain_2epy" data-role="vertex">
+      <rect x="491.61" y="50" width="130.59" height="36.9" class="m-shape"/>
+      <text x="556.9" y="68.45" class="m-label t-label" text-anchor="middle">SciFEA_main.py</text>
+    </g>
+    <g class="m-node m-node--rect" id="m35f1d7__node__symbolic_5fsolver_2epy" data-role="vertex">
+      <rect x="-175.95" y="146.9" width="148.89" height="36.9" class="m-shape"/>
+      <text x="-101.51" y="165.35" class="m-label t-label" text-anchor="middle">symbolic_solver.py</text>
+    </g>
+    <g class="m-node m-node--rect" id="m35f1d7__node__numerical_5fsolver_2epy" data-role="vertex">
+      <rect x="12.93" y="146.9" width="154.19" height="36.9" class="m-shape"/>
+      <text x="90.03" y="165.35" class="m-label t-label" text-anchor="middle">numerical_solver.py</text>
+    </g>
+    <g class="m-node m-node--rect" id="m35f1d7__node__post_5fprocessor_5ffunctions_2epy" data-role="vertex">
+      <rect x="207.12" y="146.9" width="211.17" height="36.9" class="m-shape"/>
+      <text x="312.71" y="165.35" class="m-label t-label" text-anchor="middle">post_processor_functions.py</text>
+    </g>
+    <g class="m-node m-node--rect" id="m35f1d7__node__function_5fbuilder_2epy" data-role="vertex">
+      <rect x="458.29" y="146.9" width="150.17" height="36.9" class="m-shape"/>
+      <text x="533.38" y="165.35" class="m-label t-label" text-anchor="middle">function_builder.py</text>
+    </g>
+    <g class="m-node m-node--rect" id="m35f1d7__node__dialog_5fhelpers_2epy" data-role="vertex">
+      <rect x="648.46" y="146.9" width="139.39" height="36.9" class="m-shape"/>
+      <text x="718.16" y="165.35" class="m-label t-label" text-anchor="middle">dialog_helpers.py</text>
+    </g>
+    <g class="m-node m-node--rect" id="m35f1d7__node__elements_2epy" data-role="vertex">
+      <rect x="148.65" y="243.8" width="105.43" height="36.9" class="m-shape"/>
+      <text x="201.37" y="262.25" class="m-label t-label" text-anchor="middle">elements.py</text>
+    </g>
+  </g>
+</svg>
