@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
 from PySide6.QtGui import (QPainter, QColor, QPen, QIcon, QBrush, QPixmap, QFont, QKeySequence)
-from PySide6.QtCore import (Qt, QSize)
+from PySide6.QtCore import (Qt, QSize, QTimer)
 from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
@@ -22,8 +22,11 @@ import json
 import copy
 import random
 import re
-from solver.function_builder import FormulateDistribution
-
+from typing import Any, Optional
+from _collections_abc import Callable
+from solver.function_builder import (FormulateDistribution, PolygonContainmentChecker,
+                                     ElementLoadFactorCalculator, PolygonArrowHatcher)
+from gui.dialog_helpers import (AuxilaryCanvas, ListReportLog, ButtonsDialog, ToolsGUI)
 
 # Ścieżka startu wyboru folderu
 FOLDER_PATH = os.path.dirname(__file__)
@@ -33,6 +36,7 @@ icon_path = os.path.join(file_directory, r"assets/images/Logo_main_icon.ico")
 images_path = os.path.join(file_directory, r"assets/images")
 # Słownik konfiguracji ignorowania symboli sympy:
 sympy_LOCAL = {"I": sp.Symbol("I"), "E": sp.Symbol("E"), "S": sp.Symbol("S"), "Beta": sp.Symbol("Beta"), "beta": sp.Symbol("beta"), "Q": sp.Symbol("Q")}
+DialogTools = ToolsGUI()
 
 # ====================
 # klasa strony głównej
@@ -408,14 +412,14 @@ class MainWindow(QMainWindow):
         make_label(new_loads_lt, "New Loads", 12)
         self.new_node_load_btn = QPushButton("New node load")
         self.new_element_load_btn = QPushButton("New element load")
-        new_region_load_btn = QPushButton("New region load")
+        self.new_region_load_btn = QPushButton("New region load")
         new_loads_lt.addWidget(self.new_node_load_btn)
         new_loads_lt.addWidget(self.new_element_load_btn)
-        new_loads_lt.addWidget(new_region_load_btn)
+        new_loads_lt.addWidget(self.new_region_load_btn)
 
         self.new_node_load_btn.clicked.connect(self.Load_open_NewNodeForce)
         self.new_element_load_btn.clicked.connect(self.Load_open_NewElementLoad)
-        new_region_load_btn.clicked.connect(self.Load_open_NewRegionLoad)
+        self.new_region_load_btn.clicked.connect(self.Load_open_NewRegionLoad)
 
         # layout edycji:
         selection_edit_load_lt = QVBoxLayout()
@@ -435,10 +439,13 @@ class MainWindow(QMainWindow):
         make_label(visual_settings_lt, "Display settings", 12)
         canvas_settings_btn = QPushButton("Canvas / Visual settings")
         self.mesh_display_theme_btn = QPushButton("Mesh theme - classic")
+        self.Loads_visual_obj_btn = QPushButton("Visual object editor")
         visual_settings_lt.addWidget(canvas_settings_btn)
         visual_settings_lt.addWidget(self.mesh_display_theme_btn)
+        visual_settings_lt.addWidget(self.Loads_visual_obj_btn)
         canvas_settings_btn.clicked.connect(self.Load_open_canvas_settings)
         self.mesh_display_theme_btn.clicked.connect(self.Load_change_mesh_theme)
+        self.Loads_visual_obj_btn.clicked.connect(self.Load_load_visual_obj_dialog)
 
         # Layout zapisania:
         writing_lt = QVBoxLayout()
@@ -447,6 +454,7 @@ class MainWindow(QMainWindow):
         save_as_btn = QPushButton("Save load mesh")
         writing_lt.addWidget(validate_btn)
         writing_lt.addWidget(save_as_btn)
+        validate_btn.clicked.connect(self.Load_load_validation_dialog)
         save_as_btn.clicked.connect(self.Load_open_save_file_dialog)
 
         # przycisk powrotu
@@ -494,7 +502,7 @@ class MainWindow(QMainWindow):
         self.stacked.setCurrentIndex(1)
         if hasattr(self, "prj_directories") and self.prj_directories is not None:
             try:
-                project_name = os.path.basename(self.prj_directories["main"].strip().rstrip("_SciFEAprj"))
+                project_name = os.path.basename(self.prj_directories["main"].strip().removesuffix("_SciFEAprj"))
                 self.setWindowTitle(f"Project Manager - {project_name}")
                 self.set_window_size(800, 600)
             except Exception as e:
@@ -574,7 +582,7 @@ class MainWindow(QMainWindow):
     # funkcja tworzenia nowego projektu:
     def create_new_project_directory(self):
         main_directory = QFileDialog.getExistingDirectory(self, "Select new project directory")
-        if main_directory is None:
+        if not main_directory:
             QMessageBox.critical(self, "Error", "Project directory was not selected")
             return
         else:
@@ -612,7 +620,7 @@ class MainWindow(QMainWindow):
 
         if get_dir:
             main_directory = QFileDialog.getExistingDirectory(self, "Select project directory")
-            if main_directory is None:
+            if not main_directory:
                 QMessageBox.critical(self, "Error", "Project directory was not selected")
                 return
         else:
@@ -720,7 +728,7 @@ class MainWindow(QMainWindow):
 
             # funkcja budująca GUI dla jednego pliku siatki:
             def one_mesh_GUI():
-                new_widget = QLabel(f"assigned mesh file: {mesh_file_name.strip().rstrip("_msh.json")}")
+                new_widget = QLabel(f"assigned mesh file: {mesh_file_name.strip().removesuffix("_msh.json")}")
                 font = new_widget.font()
                 font.setPointSize(12)
                 new_widget.setFont(font)
@@ -805,8 +813,8 @@ class MainWindow(QMainWindow):
             load_list = []
             for name in file_list:
                 if name.endswith("_Lmsh.json"):
-                    load_list.append(name.strip().rstrip("_Lmsh.json"))
-                    self.prj_directories["load_files"][name.strip().rstrip("_Lmsh.json")] = os.path.join(loads_base_path, name)
+                    load_list.append(name.strip().removesuffix("_Lmsh.json"))
+                    self.prj_directories["load_files"][name.strip().removesuffix("_Lmsh.json")] = os.path.join(loads_base_path, name)
 
             if not load_list:
                 load_list_widget = QLabel("No load mesh files found")
@@ -897,15 +905,63 @@ class MainWindow(QMainWindow):
                                                 "Load Mesh was not selected.\nChoose load mesh filename from \"==Loads==\" list.")
                         return
 
+                def load_parent_mesh_assignment():
+                    item = load_list_widget.currentItem()
+                    if item:
+                        loads_name = item.text()
+                        self.reasign_parent_mesh(self.prj_directories["load_files"][loads_name])
+                    else:
+                         QMessageBox.warning(self, "Cannot Reassign Load Mesh parent", 
+                                            "Load Mesh was not selected.\nChoose load mesh filename from \"==Loads==\" list.")
+                         
                 edit_mesh_btn = QPushButton("Edit selected load mesh")
+                change_parent_mesh_btn = QPushButton("Reassign parent mesh")
                 delete_load_mesh_btn = QPushButton("Delete Load Mesh")
                 delete_load_mesh_btn.setStyleSheet("background-color: red; color: white")
                 loads_lt.addWidget(edit_mesh_btn)
+                loads_lt.addWidget(change_parent_mesh_btn)
                 loads_lt.addWidget(delete_load_mesh_btn)
                 loads_lt.addStretch()
                 edit_mesh_btn.clicked.connect(load_mesh_prelauncher)
+                change_parent_mesh_btn.clicked.connect(load_parent_mesh_assignment)
                 delete_load_mesh_btn.clicked.connect(lambda: load_mesh_prelauncher(delete = True))
                 
+    # Funkcja zmiany parent mesh:
+    def reasign_parent_mesh(self, load_mesh_path):
+        assigned_mesh_path, _ = QFileDialog.getOpenFileName(self, "Select mesh JSON file", "", "(*.json)")
+        if not assigned_mesh_path:
+            return
+        if self.check_mesh_summary(assigned_mesh_path, validate_only = True):
+            mesh_name = os.path.basename(assigned_mesh_path)
+            # podmiana parenta:
+            with open(load_mesh_path, "r", encoding = "utf-8") as load_mesh:
+                load_msh_dict = json.load(load_mesh)
+            try:
+                load_msh_dict["load_summary"]["parent_mesh"] = mesh_name
+                summary = load_msh_dict["load_summary"]
+                with open(load_mesh_path, "w", encoding = "utf-8") as changed_loads:
+                    json.dump(load_msh_dict, changed_loads, indent = 4, ensure_ascii = False)
+                    QMessageBox.information(self, "Parent mesh reassigned", 
+                                            f"Load mesh - {os.path.basename(load_mesh_path):}\n\n"
+                                            "\"load_summary\": {\n"
+                                            f"    \"load_name\": \"{summary["load_name"]}\",\n"
+                                            f"--->\"parent_mesh\": \"{summary["parent_mesh"]}\",<---\n"
+                                            f"    \"data_type\": \"{summary["data_type"]}\",\n"
+                                            f"    \"mesh_type\": \"{summary["mesh_type"]}\"\n"
+                                            "}")
+            except Exception as e:
+                QMessageBox.critical( self, f"Load Mesh file {os.path.basename(load_mesh_path)} reading error",
+                        "Missing required loads summary keys:\n"
+                        f"{type(e).__name__}: {e}\n\n"
+                        "Expected layout:\n"
+                        "\"load_summary\": {\n"
+                        "    \"load_name\": \"name\",\n"
+                        "    \"parent_mesh\": \"mesh_name\",\n"
+                        "    \"data_type\": \"eg. symbolic / numerical\",\n"
+                        "    \"mesh_type\": \"eg. Parallel_Beam_Approach\"\n"
+                        "}")
+
+    
     # Funkcja assignowania wybranej siatki do projektu:
     def assign_selected_mesh_to_prj(self):
         assigned_mesh_path, _ = QFileDialog.getOpenFileName(self, "Select mesh JSON file", "", "(*.json)")
@@ -924,7 +980,7 @@ class MainWindow(QMainWindow):
     def check_load_summary(self, loads_path):
         # otwarcie pliku siatki obciążeń:
         try:
-            with open(loads_path, "r", encoding="utf-8") as load_mesh:
+            with open(loads_path, "r", encoding = "utf-8") as load_mesh:
                 self.old_load_mesh = json.load(load_mesh)
         except Exception as e:
             QMessageBox.critical(self, "Error", 
@@ -934,13 +990,18 @@ class MainWindow(QMainWindow):
         try:
             load_name = self.old_load_mesh["load_summary"]["load_name"]
             parent_mesh = self.old_load_mesh["load_summary"]["parent_mesh"]
-            if parent_mesh.rstrip() != self.mesh_name:
+            if not parent_mesh:
+                QMessageBox.critical(self, "Parent mesh not assigned",
+                                     f"Load mesh {load_name} does not have parent mesh assigned\n\n"
+                                     "Parent mesh can be reassigned via \"Reassign parent mesh\" dialog")
+                return False
+            if parent_mesh.strip() != self.mesh_name:
                 found_mesh = " - Parent mesh was not found in mesh_dump"
                 mesh_dump = os.path.join(self.prj_directories["main"], "mesh_dump")
                 if os.path.exists(mesh_dump) and os.path.isdir(mesh_dump):
                     mesh_list = os.listdir(mesh_dump)
                     if parent_mesh in mesh_list:
-                        found_mesh = " - Parent mesh found in \"mesh_dump\" folder.\nChange current mesh for project via \"Modify Mesh\" dialog"
+                        found_mesh = " - Parent mesh found in \"mesh_dump\" folder.\nChange current mesh for project via \"Mesh manager\" dialog"
                 QMessageBox.critical(self, "Invalid Load mesh",
                                      f"Load Mesh parent mesh is not assigned as projects working mesh\n{found_mesh}")
                 return False
@@ -952,7 +1013,8 @@ class MainWindow(QMainWindow):
                     invalid_2 = f"Parent mesh data type ({self.data_type})\nLoad mesh data type ({self.old_load_mesh["load_summary"]["data_type"]})"
                 if invalid_1 or invalid_2:
                     QMessageBox.critical(self, "Invalid Load mesh summary", 
-                                f"Load Mesh properties does not correspond to parent mesh:\n{invalid_1}\n{invalid_2}")
+                                f"Load Mesh properties does not correspond to parent mesh:\n{invalid_1}\n{invalid_2}\n\n"
+                                "Parent mesh can be reassigned via \"Reassign parent mesh\" dialog")
                     return False
                 else:
                     self.load_mesh_full_path = loads_path
@@ -969,7 +1031,7 @@ class MainWindow(QMainWindow):
                                     "    \"mesh_type\": \"eg. Parallel_Beam_Approach\"\n"
                                     "}")
             return False
-    
+
     # Funkcja ładowania edytora siatki obciążeń:
     def launch_load_mesh_editor(self, loads_path):
         # Sprawdzenie czy siatka obciążeń jest poprawna:
@@ -981,19 +1043,20 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "ERROR", f"Failed to unpack mesh file for validation:\n{e}")
                 return
             if self.canvas.MASTER_validate(full_validation = False, float_converter = False, return_flag = True):
+                # odpalenie silnika:
+                if not self.LoadsCore.unpack_load_mesh():
+                    return
                 # manager projektu podczas sprawdzania (check_mesh_summary) zapisał odpowiedni plik siatki, więc można nią wczytać
                 self.setWindowTitle(f"Mesh editor - ({self.mesh_name})")
-                self.go_to_load_mesher_page(load_name = os.path.basename(loads_path).rstrip(".json"), parent_mesh = self.mesh_name.rstrip(".json"))
-                # odpalenie silnika:
-                self.LoadsCore.unpack_load_mesh()
+                self.go_to_load_mesher_page(load_name = os.path.basename(loads_path).removesuffix(".json"), parent_mesh = self.mesh_name.removesuffix(".json"))
             else:
-                print("cwelownia")
+                print("cwelownia :)")
                 return
         else:
             return
 
     # Funkcje działające po otworzeniu edytora obciążeń ===========
-
+    # =========================================================================================== funkcje - EDYTOR OBCIĄŻEŃ
     # funkcja stylu rysowania siatki:
     def Load_change_mesh_theme(self):
         if self.mesh_display_theme_btn.text() == "Mesh theme - classic":
@@ -1032,7 +1095,8 @@ class MainWindow(QMainWindow):
 
     def Load_open_NewRegionLoad(self):
         dialog = RegionLoadManager(parent = self, canvas = self.canvas, LoadsCore = self.LoadsCore, mode = "add")
-        dialog.exec()
+        if dialog.exec() != QDialog.Accepted:
+            dialog.erase_polygon()
     
     def Load_open_save_file_dialog(self):
         dialog = SaveAsDialog(parent = self, canvas = self.canvas, load_mesh = True, LoadsCore = self.LoadsCore)
@@ -1047,9 +1111,18 @@ class MainWindow(QMainWindow):
             dialog.exec()
         elif self.selected_mesh_obj["type"] == "region_loads":
             dialog = RegionLoadManager(parent = self, canvas = self.canvas, LoadsCore = self.LoadsCore, mode = "edit", obj_id = self.selected_mesh_obj["id"])
-            dialog.exec()
+            if dialog.exec() != QDialog.Accepted:
+                dialog.erase_polygon()
         else:
             print("Unknown obj_type")
+    
+    def Load_load_visual_obj_dialog(self):
+        dialog = LoadsVisualOBJ_editor(self, self.canvas, self.LoadsCore, self.selected_mesh_obj["id"], self.selected_mesh_obj["type"])
+        dialog.exec()
+
+    def Load_load_validation_dialog(self):
+        dialog = ValidationDialog(self, self.canvas, self.LoadsCore, True)
+        dialog.exec()
     # ===================================================================================================================
 
     # =========================================================================================== funkcje - EDYTOR SIATKI
@@ -1076,7 +1149,7 @@ class MainWindow(QMainWindow):
             self.canvas.initiate_new_mesh(data_type = self.data_type)
 
     # funkcja sprawdzająca mesh_summary i zwrcająca do Mainwindow parametry siatki (topologię, typ danych, nazwę ect.)
-    def check_mesh_summary(self, summary_path, MessageBox = True):
+    def check_mesh_summary(self, summary_path, MessageBox = True, validate_only = False):
         if summary_path.endswith("_Lmsh.json"):
             if MessageBox:
                 QMessageBox.critical(self, "Wrong selection",
@@ -1091,22 +1164,25 @@ class MainWindow(QMainWindow):
         supported_data = ("symbolic", "numerical")
         try:
             with open(summary_path, "r", encoding="utf-8") as mesh:
-                self.old_mesh = json.load(mesh)
+                checked_mesh = json.load(mesh)
             try:
-                summary = self.old_mesh["model_summary"]
+                summary = checked_mesh["model_summary"]
                 mesh_element_layout_type = summary["mesh_type"]
                 data_type = summary["data_type"]
                 mesh_name = summary["mesh_name"]
                 log = ""
                 if mesh_element_layout_type not in supported_types:
-                    log += f"\nUnknown mesh type: {mesh_element_layout_type}\n supported types: {supported_types}"
+                    log += f"\nUnknown mesh topology: {mesh_element_layout_type}\n supported types: {supported_types}"
                 if data_type not in supported_data:
                     log += f"\nUnknown data type: {data_type}\n supported types: {supported_data}"
                 if log != "":
                     QMessageBox.critical(self, "Invalid mesh model summary",
                                             f"{log}")
                     return False
+                elif validate_only:
+                    return True
                 else:
+                    self.old_mesh = checked_mesh
                     self.mesh_element_layout_type = mesh_element_layout_type
                     self.data_type = data_type
                     self.full_mesh_path = summary_path
@@ -1375,7 +1451,7 @@ class MainWindow(QMainWindow):
                 self.new_node_load_btn.setShortcut(QKeySequence(""))
                 self.new_node_load_btn.setEnabled(False)
                 self.new_node_load_btn.setDefault(False)
-
+                
         if obj_type == "node":
             obj_id = self.Node_list.currentRow() + 1
             self.selected_mesh_obj = {"type" : obj_type, "id" : obj_id}
@@ -1400,6 +1476,9 @@ class MainWindow(QMainWindow):
                 self.node_load_list.clearSelection()
                 self.element_load_list.clearSelection()
                 self.region_load_list.clearSelection()
+                #
+                self.new_region_load_btn.setEnabled(False)
+                self.Loads_visual_obj_btn.setEnabled(False)
 
         elif obj_type == "element":
             obj_id = self.EL_list.currentRow() + 1
@@ -1424,7 +1503,10 @@ class MainWindow(QMainWindow):
                 #
                 self.node_load_list.clearSelection()
                 self.element_load_list.clearSelection()
-                self.region_load_list.clearSelection()              
+                self.region_load_list.clearSelection()
+                #
+                self.new_region_load_btn.setEnabled(False)
+                self.Loads_visual_obj_btn.setEnabled(False)              
 
         elif obj_type == "node_loads":
             item = self.node_load_list.currentItem()
@@ -1437,6 +1519,9 @@ class MainWindow(QMainWindow):
             #
             self.element_load_list.clearSelection()
             self.region_load_list.clearSelection()
+            #
+            self.new_region_load_btn.setEnabled(False)
+            self.Loads_visual_obj_btn.setEnabled(True)
 
         elif obj_type == "element_loads":
             item = self.element_load_list.currentItem()
@@ -1448,7 +1533,10 @@ class MainWindow(QMainWindow):
             self.edit_SELload_btn.setDefault(True)
             #
             self.node_load_list.clearSelection()
-            self.region_load_list.clearSelection() 
+            self.region_load_list.clearSelection()
+            #
+            self.new_region_load_btn.setEnabled(False)
+            self.Loads_visual_obj_btn.setEnabled(True)
 
         elif obj_type == "region_loads":
             item = self.region_load_list.currentItem()
@@ -1461,6 +1549,9 @@ class MainWindow(QMainWindow):
             #
             self.node_load_list.clearSelection()
             self.element_load_list.clearSelection()
+            #
+            self.new_region_load_btn.setEnabled(False)
+            self.Loads_visual_obj_btn.setEnabled(True)
 
         else:
             obj_id = None
@@ -1472,8 +1563,11 @@ class MainWindow(QMainWindow):
             #
             self.node_load_list.clearSelection()
             self.element_load_list.clearSelection()
-            self.region_load_list.clearSelection() 
-            
+            self.region_load_list.clearSelection()
+            #
+            self.new_region_load_btn.setEnabled(True)
+            self.Loads_visual_obj_btn.setEnabled(False)
+
         self.canvas.draw_OBJ_selection(obj_type, obj_id, cancel)
         self.LoadsCore.draw_load_selection(obj_type, obj_id, cancel)
     # ===================================================================================================================
@@ -1580,6 +1674,7 @@ class NodeLoadManager(QDialog):
             title = "Edit Node Load"
             label_txt = f"Edit force id: {self.dict_id}, Node ID: {self.LoadsCore.get_meshOBJ_id(self.dict_id)}"
             apply_txt = "Apply changes"
+
 
         self.setWindowTitle(f"{title}")
         self.setModal(False)
@@ -1819,15 +1914,24 @@ class NodeLoadManager(QDialog):
         else:
             key = self.dict_id
         if delete:
-            self.dialog_mode = "add"
-            self.dict_id = self.LoadsCore.get_meshOBJ_id(self.dict_id)
-            self.main_label.setText(f"Apply force to Node ID: {self.dict_id}")
-            self.setWindowTitle("New Node Load")
-            self.canvas.remove_visualOBJ(self.LoadsCore.drawn_loadOBJ["node"][key])
-            del self.LoadsCore.node_loads[key]
-            del self.LoadsCore.drawn_loadOBJ["node"][key]
-            self.LoadsCore.draw_load_selection(cancel = True)
-            self.canvas.draw()
+            reply = QMessageBox.information(self,
+                                            "Delete Node Load",
+                                            f"Are you sure you want to delete node load \"{self.dict_id}\"?\n"
+                                            "This action is irreversible.",
+                                            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                                            QMessageBox.StandardButton.Cancel)
+            if reply == QMessageBox.StandardButton.Ok:
+                self.dialog_mode = "add"
+                self.dict_id = self.LoadsCore.get_meshOBJ_id(self.dict_id)
+                self.main_label.setText(f"Apply force to Node ID: {self.dict_id}")
+                self.setWindowTitle("New Node Load")
+                self.canvas.remove_visualOBJ(self.LoadsCore.drawn_loadOBJ["node"][key])
+                del self.LoadsCore.node_loads[key]
+                del self.LoadsCore.drawn_loadOBJ["node"][key]
+                self.LoadsCore.draw_load_selection(cancel = True)
+                self.canvas.draw()
+            else:
+                return
         else:
             self.LoadsCore.node_loads[key] = vector
             self.LoadsCore.draw_node_load(obj_id = key, draw = True)
@@ -1862,6 +1966,19 @@ class ElementLoadManager(QDialog):
         self.current_direction_type = self.current_formula_type = self.current_n_points = None
         self.numerical_distribution = None
         self.symbolic_distribution = None
+
+        # sprawdzenie czy jest to reference load:
+        if self.dialog_mode == "edit":
+            origin_text = self.LoadsCore.element_loads[self.dict_id].get("origin", False)
+            origin_text = origin_text if origin_text else "str"
+        else:
+            origin_text = "str"
+
+        if self.dialog_mode == "edit" and origin_text.split("_")[0] == "ref":
+            self.reference_flag = True
+            self.region_id = origin_text.removeprefix("ref_")
+        else:
+            self.reference_flag = self.region_id = False
 
         # zarządzanie tytułem:
         if mode == "add":
@@ -2122,11 +2239,21 @@ class ElementLoadManager(QDialog):
             def simplify_num(num):
                 num_clean = round(float(num), 2)
                 return int(num_clean) if num_clean.is_integer() else num_clean
+                
+            def simplify_float(val):
+                try:
+                    float(val)
+                except Exception:
+                    pass
+                if isinstance(val, float):
+                    return round(val, 5)
+                else:
+                    return val
             # rozczepienie wyrażenia sympy:
             display_func = sp.latex(self.symbolic_distribution.xreplace({n: simplify_num(n) for n in self.symbolic_distribution.atoms(sp.Float)}))
-            sympy_base = sp.latex(sp.sympify(self.LoadsCore.element_loads[self.dict_id]["load_data"]["base_intensity"], locals = sympy_LOCAL))
-            sympy_ax = sp.latex(sp.sympify(self.LoadsCore.element_loads[self.dict_id]["load_data"]["axial_factor"], locals = sympy_LOCAL))
-            sympy_norm = sp.latex(sp.sympify(self.LoadsCore.element_loads[self.dict_id]["load_data"]["normal_factor"], locals = sympy_LOCAL))
+            sympy_base = sp.latex(sp.sympify(simplify_float(self.LoadsCore.element_loads[self.dict_id]["load_data"]["base_intensity"]), locals = sympy_LOCAL))
+            sympy_ax = sp.latex(sp.sympify(simplify_float(self.LoadsCore.element_loads[self.dict_id]["load_data"]["axial_factor"]), locals = sympy_LOCAL))
+            sympy_norm = sp.latex(sp.sympify(simplify_float(self.LoadsCore.element_loads[self.dict_id]["load_data"]["normal_factor"]), locals = sympy_LOCAL))
             if self.LoadsCore.element_loads[self.dict_id]["load_data"]["type"] == "polynomial_bezier":
                 display_func = wrap_latex_plus_minus(latex_cleaned = display_func, max_len = 100)
             clean_latex = (
@@ -2818,11 +2945,30 @@ class ElementLoadManager(QDialog):
                     "base_intensity": base_intensity,
                     "points": points}
         
-        self.distribution_dict = {"origin": False,
-                            "load_data": load_data,
-                            "intensity_settings": intensity_settings}
+        self.distribution_dict = {"origin": f"ref_{self.region_id}" if self.reference_flag else False,
+                                "load_data": load_data,
+                                "intensity_settings": intensity_settings}
         return True
         
+    # funkcja adjustująca obciążenie regionalne:
+    def manage_region_load(self, delete = False):
+        if delete:
+            for e_id in self.LoadsCore.region_loads[self.region_id]["range"]:
+                del self.LoadsCore.element_loads[f"{e_id}_{self.region_id}"]
+            self.canvas.remove_visualOBJ(self.LoadsCore.drawn_loadOBJ["region"][self.region_id])
+            del self.LoadsCore.region_loads[self.region_id]
+            self.LoadsCore.generate_load_lists(r_load = True)
+            return
+        
+        # jeśli nie usuwamy trzeba odświerzyć:
+        load_data = self.LoadsCore.element_loads[self.dict_id]["load_data"]
+        drawing_points = self.LoadsCore.element_loads[self.dict_id]["drawing_points"]
+        for e_id in self.LoadsCore.region_loads[self.region_id]["range"]:
+            self.LoadsCore.element_loads[f"{e_id}_{self.region_id}"] = {"origin": self.region_id,
+                                                                        "load_data": load_data,
+                                                                        "drawing_points": drawing_points}
+        self.LoadsCore.draw_region_load(obj_id = self.region_id, draw = True)
+    
     # Funkcja zapisująca zmiany:
     def save_changes(self, delete = False):
         # sprawdzenie czy inputy są poprawne:
@@ -2838,18 +2984,35 @@ class ElementLoadManager(QDialog):
         else:
             key = self.dict_id
         if delete:
-            self.dialog_mode = "add"
-            self.dict_id = self.LoadsCore.get_meshOBJ_id(self.dict_id)
-            self.element_label.setText(f"Apply load distribution to element ID: {self.dict_id}")
-            self.setWindowTitle("New Element Load distribution")
-            self.apply_btn.setText("Apply Load distribution")
-            del self.LoadsCore.element_loads[key]
-            self.numerical_distribution = None
-            self.symbolic_distribution = None
-            # wymazanie:
-            self.canvas_settings()
-            self.canvas.remove_visualOBJ(self.LoadsCore.drawn_loadOBJ["element"][key])
-            self.LoadsCore.draw_load_selection(cancel = True)
+            if self.reference_flag:
+                warning_txt = f"This is a reference load for region load \"{self.region_id}\".\nDeleting it will also delete the associated region load.\n"
+            else:
+                warning_txt = ""
+            reply = QMessageBox.information(self,
+                                            "Delete Element Load",
+                                            f"Are you sure you want to delete element load \"{self.dict_id}\"?\n"
+                                            f"{warning_txt}\n"
+                                            "This action is irreversible.",
+                                            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                                            QMessageBox.StandardButton.Cancel)
+            if reply == QMessageBox.StandardButton.Ok:
+                if self.reference_flag:
+                    self.manage_region_load(delete = True)
+                self.dialog_mode = "add"
+                self.dict_id = self.LoadsCore.get_meshOBJ_id(self.dict_id)
+                self.element_label.setText(f"Apply load distribution to element ID: {self.dict_id}")
+                self.setWindowTitle("New Element Load distribution")
+                self.apply_btn.setText("Apply Load distribution")
+                del self.LoadsCore.element_loads[key]
+                self.numerical_distribution = None
+                self.symbolic_distribution = None
+                # wymazanie:
+                self.canvas_settings()
+                self.canvas.remove_visualOBJ(self.LoadsCore.drawn_loadOBJ["element"][key])
+                self.LoadsCore.draw_load_selection(cancel = True)
+                self.reference_flag = self.region_id = False
+            else:
+                return
         else:
             self.LoadsCore.element_loads[key] = copy.deepcopy(self.distribution_dict)
             sym_dict = None if self.MainWindow.data_type != "symbolic" else self.LoadsCore.load_symbol_substitutes
@@ -2860,6 +3023,9 @@ class ElementLoadManager(QDialog):
             self.compose_canvas()
             self.LoadsCore.draw_element_load(obj_id = self.dict_id, draw = True)
             self.LoadsCore.draw_load_selection(obj_type = "element_loads", obj_id = self.dict_id)
+            # management regionów:
+            if self.reference_flag:
+                self.manage_region_load()
 
         # refreshowanie GUI i list
         self.Refresh_GUI()
@@ -2890,19 +3056,39 @@ class RegionLoadManager(QDialog):
         self.dict_id = obj_id
         self.current_method = None
 
-        if mode == "add":
+        def get_name(name):
+            try:
+                name = name() if callable(name) else name
+                return name
+            except Exception:
+                return None
+
+        if self.dialog_mode == "add":
             title = "New Region Load"
             label_txt = f"Define new Region Load"
             apply_txt = "Apply Region Load"
+            self.show_projectionGUI = False
         else:
             title = "Edit Region Load"
             label_txt = f"Edit Region Load: {self.dict_id}"
             apply_txt = "Apply changes"
+            self.current_method = get_name(lambda: copy.deepcopy(self.LoadsCore.region_loads[self.dict_id]["method"]))
+            self.Reference_Load_id = get_name(lambda: copy.deepcopy(self.LoadsCore.region_loads[self.dict_id]["reference_load"]))
+            self.current_intensity_line = get_name(lambda: copy.deepcopy(self.LoadsCore.region_loads[self.dict_id]["load_data"]["intensity"]))
+            self.current_angle_line = get_name(lambda: copy.deepcopy(self.LoadsCore.region_loads[self.dict_id]["load_data"]["angle"]))
+            self.current_x_fac_line = get_name(lambda: copy.deepcopy(self.LoadsCore.region_loads[self.dict_id]["load_data"]["x_factor"]))
+            self.current_z_fac_line = get_name(lambda: copy.deepcopy(self.LoadsCore.region_loads[self.dict_id]["load_data"]["z_factor"]))
+            self.elements_id_list = get_name(lambda: copy.deepcopy(self.LoadsCore.region_loads[self.dict_id]["range"]))
+            self.polygon_points = get_name(lambda: copy.deepcopy(self.LoadsCore.region_loads[self.dict_id]["points"]))
+            self.polygon_points_float = get_name(lambda: copy.deepcopy(self.LoadsCore.region_loads[self.dict_id]["points_float"]))
+            self.projection_factor = get_name(lambda: copy.deepcopy(self.LoadsCore.region_loads[self.dict_id]["load_data"]["projection_factor"]))
+            self.projection_func = get_name(lambda: copy.deepcopy(self.LoadsCore.region_loads[self.dict_id]["load_data"]["projection_func"]))
+            self.show_projectionGUI = (self.projection_func is not None and self.projection_factor is not None)
+            self.element_theta = {}
 
         self.setWindowTitle(f"{title}")
         self.setModal(False)
         self.setMaximumWidth(500)
-        self.setMinimumHeight(350)
 
         # pobranie skrajnych indeksów elementów:
         self.first_el_id = next(iter(sorted(self.canvas.elements)))
@@ -2950,12 +3136,32 @@ class RegionLoadManager(QDialog):
         close_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.apply_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         apply_close.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        # wywoływanie budowy reszty GUI:
-        self.build_method_GUI()
-        self.build_regionGUI()
 
+        # wywoływanie budowy reszty GUI:
+        def init_ui_delayed():
+            self.make_EL_LOADS_list()
+            self.Reference_Load_name = self.convert_names("element_load", self.Reference_Load_id) if hasattr(self, "Reference_Load_id") else None
+            self.build_method_GUI()
+            self.build_regionGUI()
+
+        QTimer.singleShot(0, init_ui_delayed)
+    
+    # tworzenie listy obciążeń elementów:
+    def make_EL_LOADS_list(self):
+        # tworzymy listę obciążeń elementów:
+        self.EL_LOADS = []
+        for name in self.LoadsCore.ELEMENT_LOAD_LIST:
+            try:
+                l_id = self.convert_names(source = "element_load", name = name)
+                origin = self.LoadsCore.element_loads[l_id]["origin"]
+                if not origin or origin == f"ref_{self.dict_id}":
+                    self.EL_LOADS.append(name)
+            except Exception as e:
+                 QMessageBox.critical(self, "Error - Reading Element Load List",
+                                    f"An error occurred while reading the element load list:\n{e}")
+        
     # Funkcja refreshująca
-    def Refresh_GUI(self, upper = False, down = False):
+    def Refresh_GUI(self, upper = False, down = False, refresh_polygon = True):
         # funkcja usuwająca widgety i layouty:
         def clear_layout(layout):
             if layout is None:
@@ -2975,6 +3181,11 @@ class RegionLoadManager(QDialog):
             clear_layout(self.method_lt)
             self.build_method_GUI()
         if down:
+            # wymazywanie jeśli jest:
+            if (hasattr(self, "drawnPolygonPts") and self.drawnPolygonPts is not None
+                and refresh_polygon):
+                self.erase_polygon()
+
             clear_layout(self.region_lt)
             self.build_regionGUI()
 
@@ -3004,7 +3215,7 @@ class RegionLoadManager(QDialog):
         else:
             try:
                 item = current_text() if callable(current_text) else current_text
-                if item:
+                if item is not None:
                     new_widget.setText(f"{item}")
             except Exception:
                 pass
@@ -3014,6 +3225,8 @@ class RegionLoadManager(QDialog):
 
     # funkcja tłumacząca klucze:
     def convert_names(self, source = "method", name = ""):
+        if not name:
+            return None
         if source == "method":
             if name == "Inherit from element Load":
                 return "inherit_load"
@@ -3028,8 +3241,8 @@ class RegionLoadManager(QDialog):
             
         elif source == "element_load":
             name = str(name).strip()
-            if name.split(";") == name:
-                for l_name in self.LoadsCore.ELEMENT_LOAD_LIST:
+            if name.split(";")[0] == name:
+                for l_name in self.EL_LOADS:
                     if l_name.strip().split(";")[0] == name:
                         return l_name
             else:
@@ -3048,30 +3261,18 @@ class RegionLoadManager(QDialog):
     
     # Generowanie GUI typu:
     def build_method_GUI(self):
-        def get_name(name):
-            try:
-                name = name() if callable(name) else name
-                return name
-            except Exception:
-                return None
-        
         def Load_method_change():
             self.current_method = self.convert_names("method", self.Load_methodBox.currentText())
             self.Refresh_GUI(upper = True, down = True)
 
         def direction_change():
             self.current_direction = self.directionBox.currentText()
-            self.Refresh_GUI(upper = True)
+            self.Refresh_GUI(upper = True, down = True)
         
         self.method_lt = QVBoxLayout()
         self.main_v_lt.addLayout(self.method_lt)
-        if self.dialog_mode == "edit":
-            self.current_method = get_name(lambda: self.LoadsCore.region_loads[self.dict_id]["method"])
-            self.Reference_Load_id = get_name(lambda:self.convert_names("element_load", self.LoadsCore.region_loads[self.dict_id]["reference_load"]))
-            self.current_intensity_line = get_name(lambda:self.LoadsCore.region_loads[self.dict_id]["load_data"]["intensity"])
-            self.current_angle_line = get_name(lambda:self.LoadsCore.region_loads[self.dict_id]["load_data"]["angle"])
-            self.current_x_fac_line = get_name(lambda:self.LoadsCore.region_loads[self.dict_id]["load_data"]["x_factor"])
-            self.current_z_fac_line = get_name(lambda:self.LoadsCore.region_loads[self.dict_id]["load_data"]["z_factor"])
+
+        self.Region_name_line = self.make_param_widget(self.method_lt, QLineEdit(), "Region load name: ", font_size = 10, current_text = lambda: self.dict_id)
 
         self.Load_methodBox = self.make_param_widget(self.method_lt, QComboBox(), "Method: ", font_size = 12, 
                                                      list = ["Inherit from element Load", "Closed Contour"], 
@@ -3084,8 +3285,8 @@ class RegionLoadManager(QDialog):
             label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.method_lt.addWidget(label)
             self.RefElBox = self.make_param_widget(self.method_lt, QComboBox(), "Reference Load: ", font_size = 10, 
-                                                     list = self.LoadsCore.ELEMENT_LOAD_LIST, stretch = False,
-                                                     current_text = lambda: self.Reference_Load_id)
+                                                     list = self.EL_LOADS, stretch = False,
+                                                     current_text = lambda: self.Reference_Load_name)
         else:
             label = QLabel("Defines a closed region by points and\napplies a continuous load to all enclosed elements.")
             label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -3096,7 +3297,29 @@ class RegionLoadManager(QDialog):
             self.directionBox = self.make_param_widget(self.method_lt, QComboBox(), "Load vector: ", font_size = 10, 
                                                         list = ["At Angle", "Factor components (X, Z)"], 
                                                         current_text = lambda: self.current_direction)
+            if not hasattr(self, "current_direction") or self.current_direction is None:
+                self.current_direction = self.directionBox.currentText()
             self.directionBox.currentTextChanged.connect(direction_change)
+
+            btn_txt = "Disable force factor (Enabled)" if self.show_projectionGUI else "Enable force factor (Disabled)"
+            def projection_btn_clicked():
+                self.show_projectionGUI = False if self.show_projectionGUI else True
+                self.Refresh_GUI(upper = True, down = True)
+
+            def more_info():
+                QMessageBox.information(self, "Force Factor",
+                                        "Multiplier applied to the force when acting horizontally (90° to normal).\n"
+                                        "For intermediate angles, the effective factor is interpolated between\n" 
+                                        "1.0 (normal) and this value using the selected distribution (linear or cosinusoidal).")
+
+            def add_projectionGUI():
+                print(self.projection_factor)
+                local_projection_lt, self.Projection_factor_line = self.make_param_widget(self.method_lt, QLineEdit(), "Tangential Force Factor: ", 
+                                                                                        current_text = lambda: self.projection_factor, return_lt = True, stretch = False)
+                self.projection_func_box = self.make_param_widget(local_projection_lt, QComboBox(), "Distribution", current_text = lambda: self.projection_func,
+                                                                  list = ["cosinusoidal", "linear", "hyperbolic"])
+
+                
             if self.directionBox.currentText() == "At Angle":
                 if self.MainWindow.mesh_element_layout_type == "Parallel_Beam_Approach":
                     ang_lt, self.Angle_Line = self.make_param_widget(self.method_lt, QLabel("90"), "angle (°): ", return_lt = True, stretch = False)
@@ -3106,6 +3329,17 @@ class RegionLoadManager(QDialog):
                     ang_lt.addStretch()
                 else:
                     self.Angle_Line = self.make_param_widget(self.method_lt, QLineEdit(), "angle (°): ", current_text = lambda: self.current_angle_line)
+                    projection_btn = QPushButton(f"{btn_txt}")
+                    more_info_btn = QPushButton("(i)")
+                    more_info_btn.setFixedSize(25, 25)
+                    projection_lt = QHBoxLayout()
+                    projection_lt.addWidget(projection_btn)
+                    projection_lt.addWidget(more_info_btn)
+                    self.method_lt.addLayout(projection_lt)
+                    projection_btn.clicked.connect(projection_btn_clicked)
+                    more_info_btn.clicked.connect(more_info)
+                    if self.show_projectionGUI:
+                        add_projectionGUI() 
             else:
                 if self.MainWindow.mesh_element_layout_type == "Parallel_Beam_Approach":
                     x_lt, self.X_factor_Line = self.make_param_widget(self.method_lt, QLabel("0"), "X factor:", return_lt = True, stretch = False)
@@ -3117,6 +3351,18 @@ class RegionLoadManager(QDialog):
                 else:
                     self.X_factor_Line = self.make_param_widget(self.method_lt, QLineEdit(), "X factor: ", current_text = lambda: self.current_x_fac_line)
                     self.Z_factor_Line = self.make_param_widget(self.method_lt, QLineEdit(), "Z factor: ", current_text = lambda: self.current_z_fac_line)
+                    projection_btn = QPushButton(f"{btn_txt}")
+                    more_info_btn = QPushButton("(i)")
+                    more_info_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                    more_info_btn.setFixedSize(25, 25)
+                    projection_lt = QHBoxLayout()
+                    projection_lt.addWidget(projection_btn)
+                    projection_lt.addWidget(more_info_btn)
+                    self.method_lt.addLayout(projection_lt)
+                    projection_btn.clicked.connect(projection_btn_clicked)
+                    more_info_btn.clicked.connect(more_info)
+                    if self.show_projectionGUI:
+                        add_projectionGUI()
 
         self.method_lt.addStretch()           
         return
@@ -3125,13 +3371,9 @@ class RegionLoadManager(QDialog):
     def build_regionGUI(self):
         self.region_lt = QVBoxLayout()
         self.main_v_lt.addLayout(self.region_lt)
-        
-        if self.dialog_mode == "edit":
-            self.elements_id_list = self.LoadsCore.region_loads[self.dict_id]["range"]
-            self.fill_target_list(self.elements_id_list)
-        
+         
         if self.current_method == "inherit_load":
-            self.setMaximumHeight(350)
+            self.setFixedHeight(400)
             def manage_set_mode(btn):
                 if btn == "set":
                     self.ElSetMode = "set"
@@ -3197,10 +3439,16 @@ class RegionLoadManager(QDialog):
             bottom_btns_lt.addWidget(clear_btn)
                    
         elif self.current_method == "closed_contour":
-            if self.dialog_mode == "edit":
-                self.polygon_points = self.LoadsCore.region_loads[self.dict_id]["points"]
-            elif not hasattr(self, "polygon_points") or self.polygon_points is None:
+            Fix_h_val = 460 if self.directionBox.currentText() == "At Angle" else 500
+            Fix_h_val = Fix_h_val + 25 if self.show_projectionGUI else Fix_h_val
+            self.Extend_height = 0
+
+            if not hasattr(self, "polygon_points") or self.polygon_points is None:
                 self.polygon_points = {"1": ["", ""], "2": ["", ""], "3": ["", ""]}
+                self.polygon_points_float = {}
+            elif int(max(self.polygon_points.keys(), key = int)) < 3 or int(max(self.polygon_points.keys(), key = int)) > 10:
+                self.polygon_points = {"1": ["", ""], "2": ["", ""], "3": ["", ""]}
+                self.polygon_points_float = {}
 
             def remove_point(n_pt):
                 last_pt = max(self.polygon_points, key = int)
@@ -3214,7 +3462,7 @@ class RegionLoadManager(QDialog):
                             self.polygon_points[cur_pt] = moved_point
                     # usuwanie ostatniego:
                     del self.polygon_points[last_pt]
-                self.Refresh_GUI(down = True)
+                self.Refresh_GUI(down = True, refresh_polygon = False)
             
             def make_points_lt(parent_lt, n_pt, delete = False):
                 local_lt = QHBoxLayout()
@@ -3230,11 +3478,10 @@ class RegionLoadManager(QDialog):
                     local_lt.addWidget(delete_btn)
                     delete_btn.clicked.connect(lambda: remove_point(n_pt))
 
+                self.Extend_height += 30
                 local_lt.addStretch()
                 return {"X": X_line, "Z": Z_line}
                 
-            self.setMinimumHeight(650)
-
             # label
             set_label = QLabel("Boundary Definition")
             set_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -3262,40 +3509,75 @@ class RegionLoadManager(QDialog):
                 def add_point():
                     new_index = f"{max_index + 1}"
                     self.polygon_points[new_index] = ["", ""]
-                    self.Refresh_GUI(down = True)
+                    self.Refresh_GUI(down = True, refresh_polygon = False)
 
                 add_pt_btn = QPushButton("Add point")
                 self.region_lt.addWidget(add_pt_btn)
                 add_pt_btn.clicked.connect(add_point)
             project_btn = QPushButton("Project points on Canvas")
-            project_btn.clicked.connect(self.SavePolygonPts)
+            project_btn.clicked.connect(lambda: self.SavePolygonPts(poly_flag = False))
             self.region_lt.addWidget(project_btn)
+            # ustawienie rozszerzenia aby nie było epilepsji:
+            self.setFixedHeight(Fix_h_val + self.Extend_height)
 
         if self.dialog_mode == "edit":
             delete_btn = QPushButton("Delete Region Load")
             delete_btn.setStyleSheet("background-color: red; color: white")
+            delete_btn.clicked.connect(lambda: self.save_changes(delete = True))
             self.region_lt.addWidget(delete_btn)
 
         self.region_lt.addStretch()
 
+        # wypełnianie widżetu listy
+        if self.dialog_mode == "edit":
+            self.fill_target_list(self.elements_id_list, check_int = True)
+
         return
 
     # Funkcja wypłniająca listę:
-    def fill_target_list(self, list):
+    def fill_target_list(self, in_list, check_int = False):
         self.target_list.clear()
+        # dla pierwszego wczytania sprawdzimy czy są inty
+        if check_int:
+            try:
+                in_list = [int(n_point) for n_point in in_list]
+            except Exception as e:
+                QMessageBox.critical(self, "Error - Corrupted Target Element List",
+                                    "Could not parse integer values for target elements:\n"
+                                    f"{e}")
+                return
         el_list = []
         final_list = []
-        if not list:
+        if not in_list:
             return
 
-        list_sorted = sorted(list)
+        if self.dialog_mode == "edit" and self.current_method == "inherit_load":
+            target_id_set = set(in_list)
+            ref_load_id = self.LoadsCore.get_meshOBJ_id(self.convert_names(source = "element_load", name = self.RefElBox.currentText()))
+            if ref_load_id in target_id_set:
+                QMessageBox.warning(self, "Invalid Element Set",
+                                    f"Element ID {ref_load_id} is assigned as a \"reference load\".\n"
+                                    "Therefore, it has been removed from the set.")
+                target_id_set.remove(ref_load_id)
+                if not target_id_set:
+                    self.LoadsCore.region_loads[self.dict_id]["range"] = []
+                    return
+                list_sorted = sorted(list(target_id_set))
+                self.elements_id_list = list_sorted
+            else:
+                list_sorted = sorted(list(target_id_set))
+
+        else:
+            target_id_set = set(in_list)
+            list_sorted = sorted(list(target_id_set))
+
         start_id = previous_id = list_sorted[0]
         if len(list_sorted) == 1:
             final_list = [f"{start_id}"]
         else:
             # grupowanie
-            for e_id in list_sorted[1:]: # końcówka oznacza że zaczynamy od drugiego elementu listy:
-                if int(e_id) == previous_id + 1:
+            for e_id in list_sorted[1:]: # końcówka [1:] oznacza że zaczynamy od drugiego elementu listy:
+                if e_id == previous_id + 1:
                     previous_id = int(e_id)
                 else:
                     el_list.append(f"[{start_id}]" if previous_id == start_id else f"[{start_id}; {previous_id}]")
@@ -3316,12 +3598,18 @@ class RegionLoadManager(QDialog):
     def ModifyInheritList(self, mode = None):
         # czyszczenie:
         if mode == "clear":
-            ok_box = QMessageBox.information(self, "Clearing all affected elements",
-                                             "This action is irreversable, do you want to proceed?",
-                                             QMessageBox.StandardButton.Ok, QMessageBox.StandardButton.Cancel)
+            ok_box = QMessageBox.question(self, "Clear All Affected Elements",
+                                        "This action is irreversible. Do you want to proceed?",
+                                        QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel, 
+                                        QMessageBox.StandardButton.Cancel)
             if ok_box == QMessageBox.StandardButton.Ok:
                 self.elements_id_list = []
                 self.fill_target_list(self.elements_id_list)
+                if self.ElSetMode == "set":
+                    self.Set_line_1.setText("")
+                    self.Set_line_2.setText("")
+                elif self.ElSetMode == "single":
+                    self.single_id_line.setText("")
 
             return
         
@@ -3346,29 +3634,29 @@ class RegionLoadManager(QDialog):
             error_log = []
             id_1 = check_int_val(self.Set_line_1)
             if not id_1:
-                error_log.append(f"Error - provided element id: {self.Set_line_1.text()} cannot be converted to integer")
+                error_log.append(f"Error - provided element ID '{self.Set_line_1.text()}' cannot be converted to an integer.")
             else:
                 if not check_id(id_1, self.Set_line_1):
-                    error_log.append(f"Error - provided element id: {self.Set_line_1.text()} is not present in mesh file")
+                    error_log.append(f"Error - provided element ID '{self.Set_line_1.text()}' is not present in the mesh file.")
 
             id_2 = check_int_val(self.Set_line_2)
             if not id_2:
-                error_log.append(f"Error - provided element id: {self.Set_line_2.text()} cannot be converted to integer")
+                error_log.append(f"Error - provided element ID '{self.Set_line_2.text()}' cannot be converted to an integer.")
             else:
                 if not check_id(id_2, self.Set_line_2):
-                    error_log.append(f"Error - provided element id: {self.Set_line_2.text()} is not present in mesh file")
+                    error_log.append(f"Error - provided element ID '{self.Set_line_2.text()}' is not present in the mesh file.")
 
             # sprawdzenie czy nie są te same wartości:
             if id_1 == id_2:
-                error_log.append(f"Element IDs cannot be the same ({id_1} = {id_2})")
+                error_log.append(f"Element IDs cannot be identical ({id_1} = {id_2}).")
                 self.Set_line_1.setStyleSheet("background-color: red; color: white")
                 self.Set_line_2.setStyleSheet("background-color: red; color: white")
 
             if error_log:
-                dialog = ListReportLog(self, title = "Invalid Element set definition", 
-                                       label_text = "Error log:", 
-                                       minimum_width = 300, minimum_height = 200, 
-                                       display_list = error_log)
+                dialog = ListReportLog(self, title = "Invalid Element Set Definition", 
+                                        label_text = "Error log:", 
+                                        minimum_width = 300, minimum_height = 200, 
+                                        display_list = error_log)
                 dialog.exec()
                 return
             # tworzenie zbiorów:
@@ -3394,7 +3682,7 @@ class RegionLoadManager(QDialog):
                     error_log.append(f"Error - provided element id: {self.single_id_line.text()} is not present in mesh file")
         
             if error_log:
-                dialog = ListReportLog(self, title = "Invalid Element set definition", 
+                dialog = ListReportLog(self, title = "Invalid Element Set Definition", 
                                         label_text = "Error log:", 
                                         minimum_width = 300, minimum_height = 200, 
                                         display_list = error_log)
@@ -3409,6 +3697,13 @@ class RegionLoadManager(QDialog):
         else:
             target_id_set = set(sorted(self.elements_id_list))
 
+        # sprawdzenie czy nie ma elementu referencyjnego
+        ref_load_id = self.LoadsCore.get_meshOBJ_id(self.convert_names(source = "element_load", name = self.RefElBox.currentText()))
+        if ref_load_id in (new_el_ids) and mode != "remove":
+            QMessageBox.warning(self, "Invalid Element Set",
+                                f"Element ID {ref_load_id} is assigned as a \"reference load\".\n"
+                                "Therefore, it cannot be part of the element set.")
+            return
         # listy elementów w zbiorze
         in_set_list = []
         not_in_set_list = []
@@ -3421,8 +3716,8 @@ class RegionLoadManager(QDialog):
         if mode == "add":
             if not not_in_set_list:
                 QMessageBox.warning(self, "Invalid Element IDs",
-                                    "Provided ID range is already present in\n"
-                                    "affected element set")
+                                    "The provided ID range is already present in\n"
+                                    "the affected element set.")
                 return
             else:
                 target_id_set.update(new_el_ids)
@@ -3439,10 +3734,10 @@ class RegionLoadManager(QDialog):
                         else:
                             display_list[-1] = f"{display_list[-1]}, {in_id}"
 
-                    dialog = ListReportLog(self, title = "Note - overlapping element IDs", 
-                                                    label_text = "Some IDs were already present in element set:", 
-                                                    minimum_width = 300, minimum_height = 200, 
-                                                    display_list = display_list)
+                    dialog = ListReportLog(self, self, title = "Note - Overlapping Element IDs", 
+                                            label_text = "Some IDs were already present in the element set:", 
+                                            minimum_width = 300, minimum_height = 200, 
+                                            display_list = display_list)
                     dialog.exec()
         elif mode == "remove":
             if not in_set_list:
@@ -3466,8 +3761,8 @@ class RegionLoadManager(QDialog):
                         else:
                             display_list[-1] = f"{display_list[-1]}, {in_id}"
 
-                    dialog = ListReportLog(self, title = "Note - element IDs not present", 
-                                                    label_text = "Some IDs are not present in element set:", 
+                    dialog = ListReportLog(self, self, title = "Note - Element IDs Not Present", 
+                                                    label_text = "Some IDs are not present in the element set:", 
                                                     minimum_width = 300, minimum_height = 200, 
                                                     display_list = display_list)
                     dialog.exec()
@@ -3480,9 +3775,9 @@ class RegionLoadManager(QDialog):
             self.single_id_line.setText("")
 
     # funkcja walidująca widget:
-    def validate_widget(self, widget, sym_key = None, return_val = True):
+    def validate_widget(self, widget, sym_key = None, return_val = True, return_0 = False):
         val = widget.text()
-        val, flag = self.LoadsCore.validate_val(val = val, sym_key = sym_key, flag = True)
+        val, flag = self.LoadsCore.validate_val(val = val, sym_key = sym_key, flag = True, return_0 = return_0)
         if not flag:
             widget.setStyleSheet("background-color: red; color: white")
         else:
@@ -3491,57 +3786,115 @@ class RegionLoadManager(QDialog):
             return val, flag
         return flag
     
-    # Funkcja zapisująca słownik punktów i rysująca je:
-    def SavePolygonPts(self):
+    # funkcja wymazująca:
+    def erase_polygon(self):
         if hasattr(self, "drawnPolygonPts") and self.drawnPolygonPts is not None:
-            self.canvas.remove_visualOBJ(self.drawnPolygonPts)
-            self.canvas.draw()
+                    self.canvas.remove_visualOBJ(self.drawnPolygonPts)
+                    self.drawnPolygonPts = None
+                    self.canvas.draw()
+
+    # Funkcja zapisująca słownik punktów i rysująca je:
+    def SavePolygonPts(self, poly_flag = False, skip_invalid = False):
         # walidacja punktów:
         error_log = []
         new_pt_dict = {}
+        new_pt_dict_float = {}
         seen_points = set()
         x_list = []
         z_list = []
+
         for n_pt, lt_dict in self.region_points_lines.items():
             X_val, flag = self.validate_widget(lt_dict["X"], "length", True)
-            if not flag:
-                error_log.append(f"Couldnt convert to float X: {X_val}, pt: {n_pt}")
+            if not flag and not skip_invalid:
+                error_log.append(f"Could not convert X value to float: '{X_val}' (Point {n_pt}).")
             Z_val, flag = self.validate_widget(lt_dict["Z"], "length", True)
-            if not flag:
-                error_log.append(f"Couldnt convert to float Z: {Z_val}, pt: {n_pt}")
+            if not flag and not skip_invalid:
+                error_log.append(f"Could not convert Z value to float: '{Z_val}' (Point {n_pt}).")
             if self.MainWindow.data_type == "symbolic":
                 new_pt_dict[n_pt] = [lt_dict["X"].text(), lt_dict["Z"].text()]
+                new_pt_dict_float[n_pt] = [X_val, Z_val]
             else:
                 new_pt_dict[n_pt] = [X_val, Z_val]
+                new_pt_dict_float[n_pt] = [X_val, Z_val]
 
-            # sprawdzenie czy nie powtażają się wartości:
-            if not error_log:
+            # sprawdzenie czy nie powtażają się wartości i zapisanie kiedy jest okej
+            if not error_log and not skip_invalid:
                 pt = (round(X_val, 14), round(Z_val, 14))
-            if pt in seen_points:
-                error_log.append("Error - some points have the same coordinates")
-                lt_dict["X"].setStyleSheet("background-color: red; color: white")
-                lt_dict["Z"].setStyleSheet("background-color: red; color: white")
-            else:
-                seen_points.add(pt)
-            
-            x_list.append(round(X_val, 14))
-            z_list.append(round(Z_val, 14))
-            
+                if pt in seen_points and not skip_invalid:
+                    error_log.append("Error - duplicate point coordinates detected.")
+                    lt_dict["X"].setStyleSheet("background-color: red; color: white")
+                    lt_dict["Z"].setStyleSheet("background-color: red; color: white")
+                else:
+                    seen_points.add(pt)
+                    x_list.append(round(X_val, 14))
+                    z_list.append(round(Z_val, 14))
+       
+        if skip_invalid:
+            return
+        
         if error_log:
-            dialog = ListReportLog(self, title = "Invalid point coordinates", label_text = "Invalid values:", 
+            dialog = ListReportLog(self, title = "Invalid Point Coordinates", label_text = "Invalid values:", 
                                    display_list = error_log, minimum_width = 250, minimum_height = 250)
             dialog.exec()
+            if poly_flag:
+                return False
             return
 
-        self.polygon_points = new_pt_dict
+        # sprawdzenie czy polygon jest poprawny:
+        sorted_keys = sorted(new_pt_dict_float.keys(), key=int)
+        polygon_coords = [new_pt_dict_float[k] for k in sorted_keys]
 
+        checker = PolygonContainmentChecker(polygon_coords)
+        is_valid, message_txt = checker.is_valid_polygon()
+
+        vis_dict = self.LoadsCore.get_selection_visual_dict()
+        if not is_valid and not skip_invalid:
+            vis_dict["color"] = "red"
+            QMessageBox.warning(
+                self,
+                "Invalid Polygon Geometry",
+                f"Unable to determine elements inside the region.\n\nReason: {message_txt}"
+            )
+            if poly_flag:
+                return False
+
+        # tworzenie listy elementów wewnątrz polygonu:
+        enclosed_elements = []
+        self.element_theta = {}
+        for e_id in self.canvas.elements.keys():
+            x_1, z_1, x_2, z_2, L, theta, no_node_flag = self.canvas.get_element_vector(e_id, MessageBox=False, log=False, angle_only=False)
+            if checker.is_segment_strictly_inside(x_1, z_1, x_2, z_2):
+                enclosed_elements.append(int(e_id))
+                self.element_theta[e_id] = theta
+
+        self.polygon_points = new_pt_dict
+        self.polygon_points_float = new_pt_dict_float
+        self.elements_id_list = enclosed_elements
+        self.fill_target_list(in_list = self.elements_id_list)
+
+        # wymazanie
+        self.erase_polygon()
         # rysowanie:
         x_list.append(x_list[0])
         z_list.append(z_list[0])
         n_pts = len(x_list)
-        vis_dict = self.LoadsCore.get_selection_visual_dict()
         # rysowanie linii:
         self.drawnPolygonPts = {}
+        if not is_valid:
+            self.drawnPolygonPts["error"] = self.canvas.axes.text(0.5, 0.5, f"{message_txt}",
+                                                    transform = self.canvas.axes.transAxes,
+                                                    color = "red",
+                                                    ha = 'center',  # wyśrodkowanie w poziomie
+                                                    va = 'center',  # wyśrodkowanie w pionie
+                                                    fontsize = vis_dict["text_size"],
+                                                    alpha = vis_dict["text_transparency"],
+                                                    bbox = dict(
+                                                            boxstyle = 'round,pad=0.15',
+                                                            fc = 'white',
+                                                            ec = 'none',
+                                                            alpha = vis_dict["textBOX_transparency"]))
+            
+        
         self.drawnPolygonPts["lines"] = self.canvas.axes.plot(x_list, z_list, linestyle = vis_dict["linestyle"], 
                                             linewidth = vis_dict["linewidth"], 
                                             color = vis_dict["color"], 
@@ -3564,10 +3917,382 @@ class RegionLoadManager(QDialog):
             label_list.append(label)
         self.drawnPolygonPts["labels"] = label_list
         self.canvas.draw()
+        if poly_flag:
+            return True
 
+    # Funkcja walidująco zapisująca:
+    def validate_save_input(self, delete = False):
+        # edycja elementów osiowych:
+        def alter_axial_elements(el_list, load_name):
+            info_log = []
+            del_elements = set()
+            for e_id in el_list:
+                e_type = self.canvas.elements[e_id]["type"]
+                if e_type in ("Spring_2D", "2N4DOF_Truss", "2N2DOF_Bar", "Spring"):
+                    try:
+                        norm_fac = self.LoadsCore.element_loads[f"{e_id}_{load_name}"]["load_data"]["normal_factor"]
+                        norm_fac = self.LoadsCore.validate_val(val = norm_fac, sym_key = "dimensionless", force_sympy = True)
+                        ax_fac = self.LoadsCore.element_loads[f"{e_id}_{load_name}"]["load_data"]["axial_factor"]
+                        ax_fac = self.LoadsCore.validate_val(val = ax_fac, sym_key = "dimensionless", force_sympy = True)
+                        if round(float(norm_fac), 14) != 0.0:
+                            if round(float(ax_fac), 14) != 0.0:
+                                self.LoadsCore.element_loads[f"{e_id}_{load_name}"]["load_data"]["normal_factor"] = 0.0
+                                info_log.append(f"Changed normal load factor for element ID {e_id} from {norm_fac} to 0:\n"  
+                                                f"- element type '{e_type}' cannot transfer bending (normal) loads.")
+                            else:
+                                info_log.append(f"Changed normal load factor for element ID {e_id}:\n"
+                                                f"norm: {norm_fac} to 0:\n"
+                                                f"because: axial factor = {ax_fac}, element load was deleted\n"  
+                                                f"- element type '{e_type}' cannot transfer bending (normal) loads.")
+                                del_elements.add(e_id)
+                    except Exception as ex:
+                        info_log.append(f"Failed to alter normal load factor for element ID {e_id} (load '{load_name}'):\n"
+                                        f"- {type(ex).__name__}: {ex}")
+            return info_log, del_elements
 
+        # edycja elementów belkowych
+        def alter_beam_elements(el_list, load_name):
+            info_log = []
+            del_elements = set()
+            for e_id in el_list:
+                e_type = self.canvas.elements[e_id]["type"]
+                if e_type in ("2N4DOF_EB", "2N4DOF_T_EX", "2N4DOF_T_FI", "2N4DOF_T_RI", "2N6DOF_EB_Q"):
+                    try:
+                        norm_fac = self.LoadsCore.element_loads[f"{e_id}_{load_name}"]["load_data"]["normal_factor"]
+                        norm_fac = self.LoadsCore.validate_val(val = norm_fac, sym_key = "dimensionless", force_sympy = True)
+                        ax_fac = self.LoadsCore.element_loads[f"{e_id}_{load_name}"]["load_data"]["axial_factor"]
+                        ax_fac = self.LoadsCore.validate_val(val = ax_fac, sym_key = "dimensionless", force_sympy = True)
+                        if round(float(ax_fac), 14) != 0.0:
+                            if round(float(norm_fac), 14) != 0.0:
+                                self.LoadsCore.element_loads[f"{e_id}_{load_name}"]["load_data"]["axial_factor"] = 0.0
+                                info_log.append(f"Changed axial load factor for element ID {e_id} from {ax_fac} to 0:\n"
+                                                f"- element type '{e_type}' cannot transfer axial loads.")
+                            else:
+                                info_log.append(f"Changed axial load factor for element ID {e_id}:\n"
+                                                f"ax: {ax_fac} to 0:\n"
+                                                f"because: normal factor = {norm_fac}, element load was deleted\n"   
+                                                f"- element type '{e_type}' cannot transfer axial loads.")
+                                del_elements.add(e_id)
+                    except Exception as ex:
+                        info_log.append(f"Failed to alter axial load factor for element ID {e_id} (load '{load_name}'):\n"
+                                        f"- {type(ex).__name__}: {ex}")
+            return info_log, del_elements
+
+        def alter_elements(load_name):
+            list_1, del_set_1 = alter_axial_elements(self.elements_id_list, load_name)
+            list_2, del_set_2 = (([], set()) if self.MainWindow.mesh_element_layout_type == "Generalized_Coordinate_Framing"
+                    else alter_beam_elements(self.elements_id_list, load_name))
+            display_list = list_1 + list_2
+            all_del_set = del_set_1 | del_set_2
+            if display_list:
+                dialog = ListReportLog(self, title = "Warning: Element Loads Adjusted",
+                    label_text = ("Some elements in the mesh cannot transfer the applied loads because "
+                                "their simplified formulation lacks the required DOFs.\n"
+                                "The affected load factors have been automatically set to 0:"),
+                    minimum_width=450,
+                    minimum_height=250,
+                    display_list = display_list)
+                dialog.exec()
+
+            if all_del_set:
+                self.elements_id_list = set(self.elements_id_list)
+                for e_id in all_del_set:
+                    self.elements_id_list.remove(e_id)
+                    del self.LoadsCore.element_loads[f"{e_id}_{load_name}"]
+                self.elements_id_list = sorted(list(self.elements_id_list))
+                self.LoadsCore.region_loads[region_name]["range"] = self.elements_id_list
+                self.fill_target_list(self.elements_id_list)
+            
+        # walidacja nazwy regionu
+        def validate_name():
+            error_log = False
+            name = self.Region_name_line.text()
+            if name.strip() == "":
+                error_log = "Region name was not provided."
+            elif name.strip().split("_")[0] == "ref":
+                error_log = "Region name cannot begin with the \"ref_\" or \"ref\" prefix."
+            elif name in self.LoadsCore.region_loads and self.dialog_mode == "add":
+                error_log = f"A region load named \"{name}\" already exists."
+            elif (self.dialog_mode == "edit" and
+                  name != self.dict_id and
+                  name in self.LoadsCore.region_loads):
+                error_log = f"A region load named \"{name}\" already exists."
+            if not error_log:
+                self.Region_name_line.setStyleSheet("")
+            else:
+                self.Region_name_line.setStyleSheet("background-color: red; color: white")
+            return error_log
+
+        # jeżeli jest to tryb edycji należy usunąć wszystkie regionalne obciążenia elementów powiązane z region load:
+        if self.dialog_mode == "edit":
+            for e_id in self.LoadsCore.region_loads[self.dict_id]["range"]:
+                old_load_id = f"{e_id}_{self.dict_id}"
+                if old_load_id in self.LoadsCore.element_loads:
+                    del self.LoadsCore.element_loads[old_load_id]
+        
+        if delete:
+            reply = QMessageBox.information(self,
+                                            "Delete Region Load",
+                                            f"Are you sure you want to delete region load \"{self.dict_id}\"?\n"
+                                            "This action is irreversible.",
+                                            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                                            QMessageBox.StandardButton.Cancel)
+            if reply == QMessageBox.StandardButton.Ok:
+                del self.LoadsCore.region_loads[self.dict_id]
+                # czyszczenie z canvas:
+                self.canvas.remove_visualOBJ(self.LoadsCore.drawn_loadOBJ["region"][self.dict_id])
+                if self.current_method == "inherit_load":
+                    # modyfikacja elementu referencyjnego
+                    self.LoadsCore.element_loads[self.convert_names(source = "element_load", name = self.Reference_Load_name)]["origin"] = False
+                    # trzeba chuja jeszcze raz narysować:
+                    self.LoadsCore.draw_element_load(obj_id = self.convert_names(source = "element_load", name = self.Reference_Load_name), draw = True)
+                    self.LoadsCore.generate_load_lists(e_load = True)
+                return True
+            else:
+                return False
+
+        # walidacja nazwy:
+        error = validate_name()
+        region_name = self.Region_name_line.text()
+        if error:
+            QMessageBox.warning(self, "Invalid Region Load Name", f"{error}")
+            return False
+        
+        if self.current_method == "inherit_load":
+            # pobranie ID obciążenia:
+            load_id = self.convert_names(source = "element_load", name = self.RefElBox.currentText())
+            # sprawdzamy czy nie zmieniono obciążenia referencyjnego, jeśli tak to trzeba uporzątkować "stare" obciążenie:
+            if self.dialog_mode == "edit" and self.LoadsCore.region_loads[self.dict_id].get("reference_load"):
+                old_ref_load = self.LoadsCore.region_loads[self.dict_id]["reference_load"]
+                if old_ref_load != load_id:
+                    self.LoadsCore.element_loads[old_ref_load]["origin"] = False
+                    self.LoadsCore.draw_element_load(obj_id = old_ref_load, draw = True)
+
+            # upewniam się, że jest w słowniku:
+            if load_id not in self.LoadsCore.element_loads:
+                QMessageBox.critical(self, "Error Parsing Region Data",
+                                    f"Could not find load ID '{load_id}' in the element loads list.")
+                return False
+            
+            # należy pobrać listę elementów:
+            if not hasattr(self, "elements_id_list") or not self.elements_id_list:
+                QMessageBox.warning(self, "Invalid Target Elements List", "The list is empty; no elements have been assigned.")
+                return False
+
+            # pobrano listę - następuje tworzenie słownika:
+            try:
+                ref_load_dict = {"origin": region_name,
+                    "load_data": self.LoadsCore.element_loads[load_id]["load_data"],
+                    "drawing_points": self.LoadsCore.element_loads[load_id].get("drawing_points", {})}
+            except Exception as e:
+                QMessageBox.critical(self, "Error Parsing Region Data",
+                                    f"Could not unpack load ID '{load_id}'.\nError log:\n{e}")
+                return False
+
+            # zapisywanie obciążeń elementów:
+            for e_id in self.elements_id_list:
+                element_load_key = f"{e_id}_{region_name}"
+                self.LoadsCore.element_loads[element_load_key] = ref_load_dict
+
+            # zapisywanie samego regionu:
+            self.LoadsCore.region_loads[region_name] = {"method": self.current_method,
+                                                        "range": self.elements_id_list,
+                                                        "reference_load": load_id}
+            # modyfikacja obciążenia referencyjnego:
+            self.LoadsCore.element_loads[load_id]["origin"] = f"ref_{region_name}"
+            self.LoadsCore.draw_element_load(obj_id = load_id, draw = True, reference_load = True)
+
+            # sprawdzenie czy nie trzeba usunąć starego obciążenia:
+            if self.dialog_mode == "edit" and self.dict_id != region_name:
+                del self.LoadsCore.region_loads[self.dict_id]
+                # czyszczenie z canvas:
+                self.canvas.remove_visualOBJ(self.LoadsCore.drawn_loadOBJ["region"][self.dict_id])
+
+            self.dict_id = region_name
+
+            # aktualizacja listy:
+            self.make_EL_LOADS_list()
+            # mając nową listę można zapisać:
+            self.Reference_Load_name = self.convert_names(source = "element_load", name = load_id)
+
+            # dostosowanie elementów:
+            alter_elements(load_name = self.dict_id)
+
+            # należy dokonać aktualizacji listy elementów w oknie głównym, ponieważ mogło dojść do zmian klucza origin
+            self.LoadsCore.generate_load_lists(e_load = True)
+
+            return True
+
+        else:
+            # walidacja punktów:
+            if not self.SavePolygonPts(poly_flag = True):
+                return False
+            # należy pobrać listę elementów:
+            if not hasattr(self, "elements_id_list") or not self.elements_id_list:
+                QMessageBox.warning(self, "Invalid Target Elements List", "The list is empty; no elements have been assigned.")
+                return False
+
+            # walidacja inputu intensity:
+            error_log = []
+            Base_intensity, flag = self.validate_widget(self.LoadIntensityLine, sym_key = "distributed_load", return_val = True)
+            self.current_intensity_line = self.LoadIntensityLine.text() if self.MainWindow.data_type == "symbolic" else Base_intensity
+            if not flag:
+                error_log.append(f"Could not convert Base Intensity value to float: '{self.LoadIntensityLine.text()}'.")
+            if self.current_direction == "At Angle":
+                global_angle, flag = self.validate_widget(self.Angle_Line, sym_key = "angle", return_val = True)
+                if not flag:
+                    error_log.append(f"Could not convert angle value to float: '{self.Angle_Line.text()}'.")
+                else:
+                    # wyznaczanie globalnych x_fac oraz z_fac:
+                    if self.MainWindow.data_type == "symbolic":              
+                        # Dokładny kąt w radianach:
+                        angle_round = round(global_angle, 6)
+                        angle_sym = sp.Rational(str(angle_round))
+                        angle_rad = angle_sym / 180 * sp.pi
+                        x_factor = float(sp.N(sp.cos(angle_rad), 15))
+                        z_factor = float(sp.N(sp.sin(angle_rad), 15))
+                        self.current_x_fac_line = str(sp.cos(angle_rad))
+                        self.current_z_fac_line = str(sp.sin(angle_rad))
+                        global_angle_rad = float(sp.N(angle_rad, 15))
+                        self.current_angle_line = self.Angle_Line.text()
+                    else:
+                        global_angle_rad = float(np.deg2rad(global_angle))
+                        x_factor = self.current_x_fac_line = np.cos(global_angle_rad)
+                        z_factor = self.current_z_fac_line = np.sin(global_angle_rad)
+            else:
+                x_factor, flag = self.validate_widget(self.X_factor_Line, sym_key = "dimensionless", return_val = True)
+                if not flag:
+                    error_log.append(f"Could not convert X factor value to float: '{self.X_factor_Line.text()}'.")
+                z_factor, flag = self.validate_widget(self.Z_factor_Line, sym_key = "dimensionless", return_val = True)
+                if not flag:
+                    error_log.append(f"Could not convert Z factor value to float: '{self.Z_factor_Line.text()}'.")
+                if not error_log:
+                    global_angle_rad = float(np.arctan2(z_factor, x_factor))
+                    self.current_angle_line = str((round(np.rad2deg(global_angle_rad), 6)))
+                    if self.MainWindow.data_type == "symbolic":
+                        self.current_x_fac_line = self.X_factor_Line.text()
+                        self.current_z_fac_line = self.Z_factor_Line.text()
+                    else:
+                        self.current_x_fac_line = x_factor
+                        self.current_z_fac_line = z_factor
+
+            # walidacja współczynnika projekcji:
+            if self.show_projectionGUI:
+                p_factor, flag = self.validate_widget(self.Projection_factor_line, sym_key = "dimensionless", return_val = True)
+                if not flag:
+                    error_log.append(f"Could not convert projection factor value to float: '{self.Projection_factor_line.text()}'.")
+                elif not 0 <= p_factor <= 1:
+                    self.Projection_factor_line = QLineEdit()
+                    self.Projection_factor_line.setStyleSheet("background-color: red; color: white")
+                    error_log.append(f"Projection factor must be between 0 and 1 (got {p_factor}).")
+                else:
+                    self.projection_func = self.projection_func_box.currentText()
+
+                self.projection_factor = p_factor
+            else:
+                self.projection_factor = 1.0
+                self.projection_func = "linear"
+
+            if error_log:
+                dialog = ListReportLog(self, title = "Invalid Load Parameters", label_text = "The following errors were found:", 
+                                       minimum_height = 200, minimum_width = 350, display_list = error_log)
+                dialog.exec()
+                return False
+            # Zwalidowano, należy wyznaczyć factory dla każdego elementu:
+            is_symbolic = (self.MainWindow.data_type == "symbolic")
+
+            # Jednorazowe utworzenie kalkulatora (i klasy rozkładu) dla wszystkich elementów
+            calculator = ElementLoadFactorCalculator( projection_func = self.projection_func,
+                                                    projection_factor = self.projection_factor,
+                                                    is_symbolic = is_symbolic)
+
+            for e_id in self.elements_id_list:
+                theta = self.element_theta[e_id]
+                ax_factor, norm_factor = calculator.compute_for_element(theta = theta,
+                                                                        x_factor_float = x_factor,
+                                                                        z_factor_float = z_factor,
+                                                                        x_fac_line = self.current_x_fac_line,
+                                                                        z_fac_line = self.current_z_fac_line)
+                
+                self.LoadsCore.element_loads[f"{e_id}_{region_name}"] = {"origin": region_name,
+                                                                         "load_data": { "axial_factor": ax_factor,
+                                                                                        "normal_factor": norm_factor,
+                                                                                        "base_intensity": self.current_intensity_line,
+                                                                                        "type": "constant"}}
+
+            # zapisanie obciążenia regionalnego:
+            self.LoadsCore.region_loads[region_name] = {"method": self.current_method,
+                                                        "load_data": {"intensity": self.current_intensity_line,
+                                                                      "angle": self.current_angle_line,
+                                                                      "angle_rad": global_angle_rad,
+                                                                      "x_factor": self.current_z_fac_line,
+                                                                      "z_factor": self.current_z_fac_line},
+                                                        "points": self.polygon_points,
+                                                        "points_float": self.polygon_points_float,
+                                                        "range": self.elements_id_list}
+            if self.show_projectionGUI:
+                self.LoadsCore.region_loads[region_name]["load_data"]["projection_factor"] = self.projection_factor
+                self.LoadsCore.region_loads[region_name]["load_data"]["projection_func"] = self.projection_func
+            else:
+                self.projection_factor = self.projection_func = None
+            
+            # sprawdzenie czy nie trzeba usunąć starego obciążenia:
+            if self.dialog_mode == "edit" and self.dict_id != region_name:
+                del self.LoadsCore.region_loads[self.dict_id]
+                # czyszczenie z canvas:
+                self.canvas.remove_visualOBJ(self.LoadsCore.drawn_loadOBJ["region"][self.dict_id])
+
+            self.dict_id = region_name
+
+            # dostosowanie elementów:
+            alter_elements(load_name = self.dict_id)
+            return True
+
+    # zapis zmian
     def save_changes(self, delete = False):
-        return
+        if not self.validate_save_input(delete = delete):
+            return
+
+        if delete:
+            self.dialog_mode = "add"
+            self.main_label.setText(f"Define new Region Load")
+            self.setWindowTitle("New Region Load")
+            self.apply_btn.setText("Apply Region Load")
+            # należy dodatkowo wymazać wszystkie listy itd:
+            self.elements_id_list = None
+            self.current_method = None
+            self.Reference_Load_name = None
+            self.current_intensity_line = None
+            self.current_angle_line = None
+            self.current_x_fac_line = None
+            self.current_z_fac_line = None
+            self.polygon_points = None
+            self.polygon_points_float = None
+            
+            self.LoadsCore.generate_load_lists(r_load = True)
+            self.canvas.remove_visualOBJ(self.LoadsCore.drawn_loadOBJ["region"][self.dict_id])
+            self.dict_id = None
+            self.Refresh_GUI(upper = True, down = True) # wymazywanie wizualizacji polygon pts jest wbudowane w refresh GUI
+            # usinięcie wizualne selekcji:
+            self.LoadsCore.draw_load_selection(cancel = True)
+            
+            return
+        
+        if self.dialog_mode == "add":
+            self.dialog_mode = "edit"
+            self.main_label.setText(f"Edit Region Load: {self.dict_id}")
+            self.setWindowTitle("Edit Region Load")
+            self.apply_btn.setText("Apply changes")
+
+        # dla edycji nic nie powinno się zmieniać
+        self.LoadsCore.draw_region_load(obj_id = self.dict_id, selection = False, draw = True)
+        # narysowanie selekcji:
+        self.LoadsCore.draw_load_selection(obj_id = self.dict_id, obj_type = "region_loads")
+
+        # refreshowanie GUI i list:
+        self.Refresh_GUI(upper = True, down = True)
+        self.LoadsCore.generate_load_lists(r_load = True)
+        return        
 
     def save_close(self):
         self.save_changes()
@@ -3575,7 +4300,327 @@ class RegionLoadManager(QDialog):
         return
 
     def close_dialog(self):
+        self.erase_polygon()
         self.accept()   
+
+
+# ======================================== 
+# Dialog okna manipulcaji obciążeniem regionalnym
+# ======================================== EDYTOR OBCIĄŻEŃ
+class LoadsVisualOBJ_editor(QDialog):
+    def __init__(self, parent: Any = None, canvas: Any = None, LoadsCore: Any = None, obj_id: str = None, obj_type: str = None):
+        super().__init__(parent)
+        
+        self.MainWindow = parent
+        self.setModal(True)
+
+        self.MainWindow = parent
+        self.canvas = canvas
+        self.LoadsCore = LoadsCore
+        self.obj_id = obj_id
+        self.obj_type = obj_type.split("_")[0]
+
+        self.setWindowTitle(f"Edit {self.obj_type} visuals")
+
+        main_lt = QVBoxLayout(self)
+        label = QLabel(f"Change {self.obj_type} load visuals, ID: {self.obj_id}")
+        label_font = label.font()
+        label_font.setPointSize(12)
+        label.setFont(label_font)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.main_v_lt = QVBoxLayout()
+        bottom_lt = QHBoxLayout()
+        main_lt.addWidget(label)
+        main_lt.addLayout(self.main_v_lt)
+        main_lt.addLayout(bottom_lt)
+
+        # dolny pasek:
+        apply_btn = QPushButton("Apply changes")
+        apply_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        restore_to_default_btn = QPushButton("Restore to default")
+        restore_to_default_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        delete_btn = QPushButton("Delete custom visuals")
+        delete_btn.setStyleSheet("background-color:red ; color: white")
+        delete_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        close_btn = QPushButton("Close")
+        close_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        bottom_lt.addWidget(apply_btn)
+        bottom_lt.addWidget(restore_to_default_btn)
+        bottom_lt.addWidget(delete_btn)
+        bottom_lt.addWidget(close_btn)
+        apply_btn.clicked.connect(self.apply_changes)
+        restore_to_default_btn.clicked.connect(self.restore_to_default)
+        delete_btn.clicked.connect(self.delete_visuals)
+        close_btn.clicked.connect(self.close_dialog)
+
+        self.Make_GUI()
+
+    # budowanie layoutu
+    def Make_GUI(self):
+        # pobranie słownika wizualnego:
+        if self.obj_id in self.LoadsCore.usersOBJ_visuals[self.obj_type]:
+            initail_params = self.LoadsCore.usersOBJ_visuals[self.obj_type][self.obj_id]
+        else:
+            initail_params = self.LoadsCore.get_default_visual_dict()
+        # Parametry wspólne dla wszystkich 4 typów obciążeń
+        common_vis_params = {
+            "color": {
+                "label": "Load color",
+                "list": ["black", "blue", "green", "red", "gray", "pink"],
+                "type": "str",
+            },
+            "linewidth": {
+                "label": "Main line width",
+                "list": ["0.25", "0.5", "0.75", "1", "1.25", "1.5", "1.75", "2", "3", "4", "5"],
+                "type": "float",
+            },
+            "linestyle": {
+                "label": "Line style",
+                "list": ["-", "--", "-.", ":"],
+                "type": "str",
+            },
+            "text_color": {
+                "label": "Text color",
+                "list": ["black", "blue", "green", "red", "gray", "pink"],
+                "type": "str",
+            },
+            "text_size": {
+                "label": "Font size",
+                "list": ["0", "2", "6", "8", "10", "12", "14", "16", "18", "20"],
+                "type": "int",
+            },
+            "text_transparency": {
+                "label": "Text opacity",
+                "list":  ["0", "0.1", "0.25", "0.4",  "0.5", "0.6", "0.75", "0.9", "1.0"],
+                "type": "float",
+            },
+            "textBOX_transparency": {
+                "label": "Label background opacity",
+                "list":  ["0", "0.1", "0.25", "0.4",  "0.5", "0.6", "0.75", "0.9", "1.0"],
+                "type": "float",
+            },
+        }
+
+        # Specyficzne dla obciążenia węzła
+        node_vis_params = {
+            "load_scale": {
+                "label": "Load scale",
+                "list": "2000",
+                "type": "float",
+            },
+            "transparency": {
+                "label": "Load opacity",
+                "list":  ["0", "0.1", "0.25", "0.4",  "0.5", "0.6", "0.75", "0.9", "1.0"],
+                "type": "float",
+            },
+        }
+
+        # Specyficzne dla obciążenia elementu
+        element_vis_params = {
+            "load_scale": {
+                "label": "Load scale",
+                "list": "2000",
+                "type": "float",
+            },
+            "linewidth_thinn": {
+                "label": "Hatch thickness",
+                "list": ["0.25", "0.5", "0.75", "1", "1.25", "1.5", "1.75", "2"],
+                "type": "float",
+            },
+            "transparency": {
+                "label": "Load opacity",
+                "list":  ["0", "0.1", "0.25", "0.4",  "0.5", "0.6", "0.75", "0.9", "1.0"],
+                "type": "float",
+            },
+        }
+
+        # Specyficzne dla regionu dziedziczonego (region_loads -> inherit_load)
+        inherit_region_vis_params = {
+            "load_scale": {
+                "label": "Load scale",
+                "list": "2000",
+                "type": "float",
+            },
+            "linewidth_thinn": {
+                "label": "Hatch thickness",
+                "list": ["0.25", "0.5", "0.75", "1", "1.25", "1.5", "1.75", "2"],
+                "type": "float",
+            },
+            "region_transparency": {
+                "label": "Region opacity",
+                "list": ["0", "0.1", "0.25", "0.4",  "0.5", "0.6", "0.75", "0.9", "1.0"],
+                "type": "float",
+            },
+        }
+
+        # Specyficzne dla regionu wielokątnego
+        polygon_region_vis_params = {
+            "linewidth_thinn": {
+                "label": "Hatch thickness",
+                "list": ["0.25", "0.5", "0.75", "1", "1.25", "1.5", "1.75", "2"],
+                "type": "float",
+            },
+            "region_transparency": {
+                "label": "Region opacity",
+                "list": ["0", "0.1", "0.25", "0.4",  "0.5", "0.6", "0.75", "0.9", "1.0"],
+                "type": "float",
+            },
+        }
+
+        # tworzenie słownika:
+        if self.obj_type == "node":
+            self.active_params = common_vis_params | node_vis_params
+        elif self.obj_type == "element":
+            self.active_params = common_vis_params | element_vis_params
+        elif self.obj_type == "region" and self.LoadsCore.region_loads[self.obj_id]["method"] == "inherit_load":
+            self.active_params = common_vis_params | inherit_region_vis_params
+        elif self.obj_type == "region" and self.LoadsCore.region_loads[self.obj_id]["method"] == "closed_contour":
+            self.active_params = common_vis_params | polygon_region_vis_params
+        else:
+            QMessageBox.critical(self, "Loading visual data error",
+                                 f"Could not load visual data for {self.obj_type} load, id: {self.obj_id}.")
+            return
+        # tworzenie layoutu:
+        for property_name, prop_dict in self.active_params.items():
+            widget_type = QLineEdit() if property_name == "load_scale" else QComboBox()
+            new_widget = DialogTools.makeLayout1(self.main_v_lt, widget_type, QHBoxLayout(),
+                                                 prop_dict["label"], prop_dict["list"], font_size = 10,
+                                                 set_widgetItem = initail_params[property_name])
+            self.active_params[property_name]["widget"] = new_widget
+
+        self.selection_btn = QPushButton("Hide selection")
+        self.selection_btn.clicked.connect(self.selection_control)
+        self.selection_control() # po to aby wyłączyć selekcję
+        self.selection_btn.setStyleSheet("background-color:green ; color: white")
+        selection_lt = QHBoxLayout()
+        selection_lt.addWidget(self.selection_btn)
+        selection_lt.addStretch()
+        self.main_v_lt.addLayout(selection_lt)
+        return
+
+    def selection_control(self):
+        if self.selection_btn.text() == "Show selection":
+            self.selection_btn.setText("Hide selection")
+            self.LoadsCore.draw_load_selection(obj_type = f"{self.obj_type}_loads", obj_id = self.obj_id)
+        elif self.selection_btn.text() == "Hide selection":
+            self.selection_btn.setText("Show selection")
+            self.LoadsCore.draw_load_selection(cancel = True)
+        else:
+            return
+    
+    def draw_loads(self):
+        if self.obj_type == "node":
+            self.LoadsCore.draw_node_load(obj_id = self.obj_id, draw = True)
+        elif self.obj_type == "element":
+            self.LoadsCore.draw_element_load(obj_id = self.obj_id, draw = True)
+        elif self.obj_type == "region":
+            self.LoadsCore.draw_region_load(obj_id = self.obj_id, draw = True)
+        
+    def apply_changes(self):
+        def assign_val(sub_dict, param_name):
+            if param_name == "load_scale":
+                widget_val = sub_dict["widget"].text()
+                try:
+                    abs_val = float(widget_val)
+                    if abs_val < 0:
+                        QMessageBox.warning(self, f"Load scale Invalid value ({abs_val})",
+                                            "Load scale cannot be negative")
+                        sub_dict["widget"].setStyleSheet("background-color:red ; color: white")
+                        return False
+                    else:
+                        sub_dict["widget"].setStyleSheet("")
+                        return abs_val
+                except Exception:
+                    QMessageBox.warning(self, f"Load scale Invalid value ({widget_val})",
+                                        "Load scale must be a float number")
+                    sub_dict["widget"].setStyleSheet("background-color:red ; color: white")
+                    return False
+
+            widget_val = sub_dict["widget"].currentText()
+            if sub_dict["type"] == "float":
+                return float(widget_val)
+            elif sub_dict["type"] == "int":
+                return int(widget_val)
+            else:
+                return widget_val
+        # tworzenie nowego słownika:
+        new_vis_dict = {}
+        for param_name, param_dict in self.active_params.items():
+            new_val = assign_val(param_dict, param_name)
+            if new_val is False:
+                return
+            new_vis_dict[param_name] = new_val
+        
+        # zapisanie
+        self.LoadsCore.usersOBJ_visuals[self.obj_type][self.obj_id] = new_vis_dict
+
+        if self.selection_btn.text() == "Hide selection": # Robione po to aby selekcja nadal była "na wierzchu"
+            self.selection_control()
+            # rysowanie
+            self.draw_loads()
+            QTimer.singleShot(0, self.selection_control)
+        else:
+            # rysowanie
+            self.draw_loads()
+        return
+    
+    def restore_to_default(self):
+        load_type = self.obj_type.split("_")[0]
+        single_btn_text = f"Restore for {load_type} load ({self.obj_id})"
+        all_btn_text = "Restore for all loads"
+
+        dialog = ButtonsDialog(self, title = "Restore Default Visuals",
+            information_text=( "Choose whether to restore default visuals only for the"
+                            " selected load or for all loads."),
+            buttons_dict={single_btn_text: "single",
+                        all_btn_text: "all"},
+            visuals = {all_btn_text: "red;white"},
+            font_size = 11,
+            minimum_width = 250, minimum_height = 60)
+        dialog.exec()
+
+        if dialog.return_val == "all":
+            choice = QMessageBox.warning(self, "Confirm Restore All",
+              "This action will reset custom visuals for all loads.\n\n"
+              "This action cannot be undone. Do you want to proceed?",
+              QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Apply,
+              QMessageBox.StandardButton.Cancel)
+            
+            if choice == QMessageBox.StandardButton.Apply:
+                self.LoadsCore.usersOBJ_visuals = {"canvas_settings": copy.deepcopy(self.canvas.load_mesh_default_visual_settings),
+                                                   "node": {},
+                                                   "element": {},
+                                                   "region": {}}
+                DialogTools.clearLayout(self.main_v_lt)
+                self.Make_GUI()
+                self.draw_loads()
+        elif dialog.return_val == "single":
+            default_params = self.LoadsCore.get_default_visual_dict()
+            for param_name, param_dict in self.active_params.items():
+                DialogTools.setWidgetContents(param_dict["widget"], default_params[param_name])
+            self.apply_changes()
+
+
+        
+        
+        return
+
+    def delete_visuals(self):
+        choice = QMessageBox.warning(self, "Confirm custom visuals removal",
+              "This action will remove custom visuals for selected load.\n"
+              "*Visual object editor will close afret confirmation*\n\n"
+              "This action cannot be undone. Do you want to proceed?",
+              QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Apply,
+              QMessageBox.StandardButton.Cancel)
+        if choice == QMessageBox.StandardButton.Apply:
+            if self.obj_id in self.LoadsCore.usersOBJ_visuals[self.obj_type]:
+                del self.LoadsCore.usersOBJ_visuals[self.obj_type][self.obj_id]
+            self.close_dialog()
+
+    def close_dialog(self):
+        self.draw_loads()
+        self.LoadsCore.draw_load_selection(obj_type = f"{self.obj_type}_loads", obj_id = self.obj_id)
+        self.accept()
 
 
 # ======================================== 
@@ -3585,9 +4630,6 @@ class LoadMeshEditorCore:
     def __init__(self, MainWindow, canvas):
         self.MainWindow = MainWindow
         self.canvas = canvas
-
-        # Słownik podstawowych ustawień gradicznych:
-        self.LoadsVisaul_dict = self.canvas.load_mesh_visual_settings
         # self.MainWindow.old_load_mesh
 
     # Funkcja dobierania nazwy klucza:
@@ -3610,9 +4652,14 @@ class LoadMeshEditorCore:
             return int(load_key.split('_')[0])
 
     # Walidacja wartości:
-    def validate_val(self, val, sym_key, flag = False, return_raw = False, force_sympy = False):
+    def validate_val(self, val, sym_key, flag = False, return_raw = False, force_sympy = False, return_0 = False):
         # Próba zamiana na float:
         try:
+            if val is None or val == "":
+                abs_val = 0 if return_0 else val
+                if flag:
+                    return abs_val, False
+                return abs_val
             abs_val = float(val)
             if flag:
                 return abs_val, True
@@ -3680,7 +4727,7 @@ class LoadMeshEditorCore:
                 if not region_origin:
                     self.ELEMENT_LOAD_LIST.append(f"{l_id}; {type}, base Q: {base_intensity}")
                 elif region_origin.split("_")[0] == "ref":
-                    self.ELEMENT_LOAD_LIST.append(f"{l_id}; ref for: {region_origin.split("_")[1]}")
+                    self.ELEMENT_LOAD_LIST.append(f"{l_id}; ref for: {region_origin.removeprefix("ref_")}")
 
              # czyszczenie widgetu i wypełnianie go:
             self.MainWindow.element_load_list.clear()
@@ -3691,7 +4738,7 @@ class LoadMeshEditorCore:
             # funkcja generowania listy węzłowych obciążeń:
             for l_id, l_dict in self.region_loads.items():
                 # pobranie wartości:
-                type = l_dict.get("type", "???")
+                type = l_dict.get("method", "???")
                 self.REGION_LOAD_LIST.append(f"{l_id}; type: {type}")
 
                 # czyszczenie widgetu i wypełnianie go:
@@ -3702,47 +4749,122 @@ class LoadMeshEditorCore:
 
     # Funkcja wczytania siatki:
     def unpack_load_mesh(self):
-        # wczytytanie summary:
-        self.load_summary = self.MainWindow.old_load_mesh["load_summary"]
-        if self.MainWindow.data_type == "symbolic":
-            self.load_symbol_substitutes = self.MainWindow.old_load_mesh["load_symbol_substitutes"]
-            if "length" not in self.load_symbol_substitutes:
-                try:
-                    self.load_symbol_substitutes["length"] = copy.deepcopy(self.canvas.symbol_substitutes["length"])
-                except Exception:
-                    pass
-        self.node_loads = self.MainWindow.old_load_mesh["node_loads"]
-        self.element_loads = self.MainWindow.old_load_mesh["element_loads"] 
-        self.region_loads = self.MainWindow.old_load_mesh["region_loads"]
-        # pobranie visualsów:
-        self.usersOBJ_visuals = self.MainWindow.old_load_mesh.get("OBJ_visuals", {"node":{}, "element":{}, "region":{}})
-        # generowanie list:
-        self.generate_load_lists(True, True, True)
-        # inicjowanie słownika narysowanych obiektów:
-        self.drawn_loadOBJ = {"node":{}, "element":{}, "region":{}}
-        self.drawnSelection_OBJ = None
-        # rysowanie:
-        self.draw_load_mesh()
-
+        try:
+            # wczytytanie summary:
+            self.load_summary = self.MainWindow.old_load_mesh["load_summary"]
+            # wczytanie ustawień graficznych:
+            try:
+                self.LoadsVisaul_dict = self.MainWindow.old_load_mesh["OBJ_visuals"]["canvas_settings"]
+            except Exception:
+                # Słownik podstawowych ustawień gradicznych:
+                self.LoadsVisaul_dict = self.canvas.load_mesh_default_visual_settings
+                pass
+            if self.MainWindow.data_type == "symbolic":
+                self.load_symbol_substitutes = self.MainWindow.old_load_mesh["load_symbol_substitutes"]
+                if "length" not in self.load_symbol_substitutes:
+                    try:
+                        self.load_symbol_substitutes["length"] = copy.deepcopy(self.canvas.symbol_substitutes["length"])
+                    except Exception:
+                        pass
+            self.node_loads = self.MainWindow.old_load_mesh["node_loads"]
+            self.element_loads = self.MainWindow.old_load_mesh["element_loads"] 
+            self.region_loads = self.MainWindow.old_load_mesh["region_loads"]
+            # pobranie visualsów:
+            self.usersOBJ_visuals = self.MainWindow.old_load_mesh.get("OBJ_visuals", {"node":{}, "element":{}, "region":{}})
+            # inicjowanie słownika narysowanych obiektów:
+            self.drawn_loadOBJ = {"node":{}, "element":{}, "region":{}}
+            self.drawnSelection_OBJ = None
+            # rysowanie:
+            self.draw_load_mesh()
+            # generowanie list:
+            self.generate_load_lists(True, True, True)
+            return True
+        except Exception as e:
+            QMessageBox.critical(self.MainWindow, "Critical load mesh extraction error",
+                                 "An error occured while extracting load mesh data:\n"
+                                 f"{type(e).__name__}: {e}")
+            return False
+    
     # funkcja rysująca obciążenia:
     def draw_load_mesh(self):
-        for obj_id in self.node_loads.keys():
-            self.draw_node_load(obj_id)
-
+        # rysowanie obciążeń węzłów
+        n_loads = e_loads = r_loads = True
+        log = []
+        try:
+            for obj_id in self.node_loads.keys():
+                self.draw_node_load(obj_id)
+        except Exception as e_node:
+            n_loads = False
+            log.append("An error occured while drawing Node Loads:\n"
+                       f"{type(e_node).__name__}: {e_node}\n"
+                       "ERASED all NODE LOADS data to prevent crashes")
+        
+        # rysowanie obciążeń elementów
         # Po prostu dla infa, że długo się będzie wczytywała siatka
         self.el_draw_MessageBOX = False
-        for obj_id in self.element_loads.keys():
-            self.draw_element_load(obj_id)
+        try:
+            for obj_id, l_dict in self.element_loads.items():
+                if not l_dict.get("origin", False):
+                    self.draw_element_load(obj_id)
+                elif l_dict.get("origin", "").split("_")[0] == "ref":
+                    self.draw_element_load(obj_id, reference_load = True)
+        except Exception as e_element:
+            e_loads = False
+            log.append("An error occured while drawing Element Loads:\n"
+                       f"{type(e_element).__name__}: {e_element}\n"
+                        "ERASED all ELEMENT LOADS data to prevent crashes")
+        
+        # rysowanie obciążeń regionalnych:
+        try:
+            for obj_id in self.region_loads.keys():
+                self.draw_region_load(obj_id)
+        except Exception as e_region:
+            r_loads = False
+            log.append("An error occured while drawing RegionLoads:\n"
+                       f"{type(e_region).__name__}: {e_region}\n"
+                        "ERASED all REGION LOAD data to prevent crashes")
+
+        if log:
+            if not n_loads:
+                self.node_loads = {}
+            if not e_loads:
+                self.element_loads = {}
+            if not r_loads:
+                self.region_loads = {}
+            info_txt = ""
+            for log_txt in log:
+                info_txt += f"{log_txt}\n"
+            info_txt += "*the data was erased from programs running memory, no load file was modified*\n\nProceed to work with load mesh file?"
+            dialog = ButtonsDialog(self.MainWindow, title = "Load Mesh Generation ERROR", 
+                                   information_text = info_txt,
+                                   buttons_dict = {"Go back to project manager" : False,
+                                                   "Proceed": True})
+            dialog.exec()
+            if dialog.return_val:
+                self.draw_load_mesh()
+            else:
+                self.MainWindow.go_to_project_page()
+
+
+
+
+
 
         self.canvas.draw()
 
-
     # funkcja zapisywania siatki:
-    def save_load_mesh(self, copy = False, float_converter = False, visuals = False):
+    def save_load_mesh(self, file_copy = False, float_converter = False, visuals = False):
         # Tworzenie odpowiednich słowników
         if float_converter:
-            print("NOT IMPLEMENTED YET")
-            return
+            float_dicts = self.MASTER_validate(float_converter = True, return_flag = True)
+            if not float_dicts:
+                return
+            l_summary = copy.deepcopy(self.load_summary)
+            l_summary["parent_mesh"] = False
+            l_summary["data_type"] = "numerical"
+            n_loads_dict = float_dicts["node_loads"]
+            e_loads_dict = float_dicts["element_loads"]
+            r_loads_dict = float_dicts["region_loads"]
         else:
             l_summary = self.load_summary
             n_loads_dict = self.node_loads
@@ -3766,7 +4888,7 @@ class LoadMeshEditorCore:
             dump.update({"OBJ_visuals": self.usersOBJ_visuals})
 
         # Pobranie lokalizacji dla siatki obciążeń:
-        if not copy:
+        if not file_copy:
             load_mesh_path = self.MainWindow.load_mesh_full_path
             with open(load_mesh_path, "w", encoding="utf-8") as load_mesh:
                 json.dump(dump, load_mesh, indent = 4)
@@ -3795,7 +4917,8 @@ class LoadMeshEditorCore:
                 "linestyle": self.LoadsVisaul_dict["loads_linestyle"],
                 "text_size": self.LoadsVisaul_dict["text_size"],
                 "text_transparency": self.LoadsVisaul_dict["text_transparency"],
-                "textBOX_transparency": self.LoadsVisaul_dict["textBOX_transparency"]}
+                "textBOX_transparency": self.LoadsVisaul_dict["textBOX_transparency"],
+                "region_transparency": self.LoadsVisaul_dict["region_transparency"]}
 
     # tworzenie słownika dla podkreśleń:
     def get_selection_visual_dict(self):
@@ -3809,21 +4932,22 @@ class LoadMeshEditorCore:
                 "text_size": self.LoadsVisaul_dict["text_size"],
                 "text_transparency": self.LoadsVisaul_dict["text_transparency"],
                 "textBOX_transparency": self.LoadsVisaul_dict["textBOX_transparency"],
-                "marker_size": self.canvas.selection_size}
+                "marker_size": self.canvas.selection_size,
+                "region_transparency": self.LoadsVisaul_dict["region_transparency"]}
 
     # funkcja rysująca zaznaczenie:
     def draw_load_selection(self, obj_type = None, obj_id = None, cancel = False):
         if hasattr(self, "drawnSelection_OBJ") and self.drawnSelection_OBJ is not None:
             self.canvas.remove_visualOBJ(self.drawnSelection_OBJ)
-            if cancel or obj_type not in {"node_loads", "element_loads", "region_load"}:
+            if cancel or obj_type not in {"node_loads", "element_loads", "region_loads"}:
                 self.canvas.draw()
                 return
         if obj_type == "node_loads":
             self.draw_node_load(obj_id, selection = True)
         elif obj_type == "element_loads":
             self.draw_element_load(obj_id, selection = True)
-        elif obj_type == "region_load":
-            return
+        elif obj_type == "region_loads":
+            self.draw_region_load(obj_id, selection = True)
         self.canvas.draw()
         return
     
@@ -3992,14 +5116,21 @@ class LoadMeshEditorCore:
                 self.drawn_loadOBJ["node"][obj_id] = {"force_arrow": force_arrow, "momentum_arrow": momentum_arrow, "arm": arm,  "label": label}
             return
 
-        # bloki try/except:
+        # pobranie skali
+        general_scale = self.get_default_visual_dict()["load_scale"]
         if obj_id in self.usersOBJ_visuals["node"]:
-            vis_dict = self.usersOBJ_visuals["node"][obj_id]
+            vis_dict = copy.deepcopy(self.usersOBJ_visuals["node"][obj_id])
+            if "load_scale" in vis_dict:
+                general_scale = vis_dict["load_scale"]
+        # bloki try/except:
+        if obj_id in self.usersOBJ_visuals["node"] and not selection:
+            vis_dict = copy.deepcopy(self.usersOBJ_visuals["node"][obj_id])      
         elif selection:
             vis_dict = self.get_selection_visual_dict()
         else:
-            vis_dict = self.get_default_visual_dict()
+            vis_dict = copy.deepcopy(self.get_default_visual_dict())
         try:
+            vis_dict["load_scale"] = general_scale
             draw_load(vis_dict = vis_dict)
         except Exception as e:
             print(f"Error - drawing node load id {obj_id}:\n{e}")
@@ -4010,9 +5141,10 @@ class LoadMeshEditorCore:
         return
 
     # Rysowanie obciążenia elementu:
-    def draw_element_load(self, obj_id, selection = False, draw = False, region = False, re_id = None):
+    def draw_element_load(self, obj_id, selection = False, draw = False, re_id = None, reference_load = False):
         # pobranie id elementu:
         e_id = self.get_meshOBJ_id(obj_id)
+        L_id = obj_id.split("_")[1] if str(obj_id) != str(e_id) else e_id
         # usuwanie starego dla braku selekcji:
         if not selection and obj_id in self.drawn_loadOBJ["element"]:
             self.canvas.remove_visualOBJ(self.drawn_loadOBJ["element"][obj_id])
@@ -4067,11 +5199,18 @@ class LoadMeshEditorCore:
             except Exception as e:
                 print(e)
                 flag_2 = False
-            
+
+        if re_id:
+            load_name = f"{re_id}_e{e_id}"
+        elif reference_load:
+            load_name = f"Ref - L{L_id}e{e_id}"
+        else:
+            load_name = f"e{e_id}L_{L_id}"
+    
         # Rysowanie awaryjnego tekstu
         if False in {flag_1, flag_2}:
             if selection:
-                label = self.canvas.axes.text(m_x, m_z, f"eL_{e_id}: Corrupted load ({obj_id})",
+                label = self.canvas.axes.text(m_x, m_z, f"{load_name}: Corrupted load ({obj_id})",
                                                                 color = "red",
                                                                 ha = 'center',
                                                                 va = 'center',
@@ -4082,11 +5221,11 @@ class LoadMeshEditorCore:
                                                                         fc = 'green',
                                                                         ec = 'none',
                                                                         alpha = 1))
-                if region:
+                if re_id:
                     return {"error": label}
                 self.drawnSelection_OBJ = {"error": label}
             else:
-                label = self.canvas.axes.text(m_x, m_z, f"eL_{e_id}: Corrupted load ({obj_id})",
+                label = self.canvas.axes.text(m_x, m_z, f"{load_name}: Corrupted load ({obj_id})",
                                                 color = "red",
                                                 ha = 'center',
                                                 va = 'center',
@@ -4097,13 +5236,24 @@ class LoadMeshEditorCore:
                                                         fc = 'white',
                                                         ec = 'none',
                                                         alpha = 0.8))
-                if region:
+                if re_id:
                     return {"error": label}
                 self.drawn_loadOBJ["element"][obj_id] = {"error": label}
             return
 
         # funkcja rysująca, musi wyznaczyć punkty dla strzałki
         def draw_load(vis_dict):
+            # jeśli jest to region to podstawiamy odpowiednie transparency, reszta kluczy jest taka sama:
+            if re_id and not selection:
+                region_transparency = vis_dict["region_transparency"]
+                vis_dict["transparency"] = region_transparency
+            elif re_id and reference_load and selection:
+                linewidth = 1.25 * vis_dict["linewidth"]
+                vis_dict["linewidth"] = linewidth
+                transparency = 1.5 * vis_dict["transparency"]
+                vis_dict["transparency"] = transparency if transparency < 1.0 else 1.0
+                vis_dict["color"] = "blue"
+                
             # skalowanie osi:
             ax_scale = L # formalnie długość to 1, więc ax_scale = L / 1
             x_scaled = np.array([ax_scale * t for t in x_dimenless])
@@ -4142,7 +5292,7 @@ class LoadMeshEditorCore:
                                                     alpha = vis_dict["transparency"])
             
             if selection:
-                if region:
+                if re_id:
                     return {"distribution": func, "hatch": hatch_list}
                 self.drawnSelection_OBJ = {"distribution": func, "hatch": hatch_list}
                 return
@@ -4154,7 +5304,7 @@ class LoadMeshEditorCore:
                 m_x_func = x_final[middle_pt]
                 x_txt = (m_x + m_x_func) / 2
                 z_txt = (m_z + m_z_func) / 2
-                label = self.canvas.axes.text(x_txt, z_txt, f"eL_{obj_id}",
+                label = self.canvas.axes.text(x_txt, z_txt, f"{load_name}",
                                                                 color = vis_dict["text_color"],
                                                                 ha = 'center',  # wyśrodkowanie w poziomie
                                                                 va = 'center',  # wyśrodkowanie w pionie
@@ -4168,40 +5318,674 @@ class LoadMeshEditorCore:
                                                                         ec = 'none',
                                                                         alpha = vis_dict["textBOX_transparency"]))
  
-                if region:
+                if re_id:
                     return {"distribution": func, "hatch": hatch_list, "label": label}
                 self.drawn_loadOBJ["element"][obj_id] = {"distribution": func, "hatch": hatch_list, "label": label}
                 return
 
+
+        # pobranie skali:
+        general_scale = self.get_default_visual_dict()["load_scale"]
+        if obj_id in self.usersOBJ_visuals["element"] and not re_id:
+            vis_dict = copy.deepcopy(self.usersOBJ_visuals["element"][obj_id])
+            if "load_scale" in vis_dict:
+                general_scale = vis_dict["load_scale"]
+        elif re_id in self.usersOBJ_visuals["region"] and re_id:
+            vis_dict = copy.deepcopy(self.usersOBJ_visuals["region"][re_id])
+            if "load_scale" in vis_dict:
+                general_scale = vis_dict["load_scale"]
+
         # bloki try/except:
-        if obj_id in self.usersOBJ_visuals["element"] and not region:
-            vis_dict = self.usersOBJ_visuals["element"][obj_id]
-        elif re_id in self.usersOBJ_visuals["region"] and region:
-            vis_dict = self.usersOBJ_visuals["region"][re_id]
+        if obj_id in self.usersOBJ_visuals["element"] and not re_id and not selection:
+            vis_dict = copy.deepcopy(self.usersOBJ_visuals["element"][obj_id])
+        elif re_id in self.usersOBJ_visuals["region"] and re_id and not selection:
+            vis_dict = copy.deepcopy(self.usersOBJ_visuals["region"][re_id])
         elif selection:
             vis_dict = self.get_selection_visual_dict()
         else:
             vis_dict = self.get_default_visual_dict()
+        vis_dict["load_scale"] = general_scale
         try:
-            if region:
+            if re_id:
                 return draw_load(vis_dict = vis_dict)
             draw_load(vis_dict = vis_dict)
         except Exception as e:
             print(f"Error - drawing element load id {obj_id}:\n{e}")
             vis_dict = self.get_default_visual_dict()
-            if region:
+            if re_id:
                 return draw_load(vis_dict = vis_dict)
             draw_load(vis_dict = vis_dict)
         if draw:
             self.canvas.draw()
         return
 
+    # zarządzanie rysowaniem regionów:
+    def draw_region_load(self, obj_id, selection = False, draw = False):
+        if self.region_loads[obj_id]["method"] == "inherit_load":
+            self.draw_Inherit_region_load(obj_id = obj_id, selection = selection, draw = draw)
+        elif self.region_loads[obj_id]["method"] == "closed_contour":
+            self.draw_Polygon_region_load(obj_id = obj_id, selection = selection, draw = draw)
+    
+    # rysowanie obciążenia regionalnego od elementu:
+    def draw_Inherit_region_load(self, obj_id, selection = False, draw = False):
+        # wymazywanie i inicjalizacja słownika tylko dla normalnego trybu (nie selekcji):
+        if not selection:
+            if obj_id in self.drawn_loadOBJ["region"]:
+                self.canvas.remove_visualOBJ(self.drawn_loadOBJ["region"][obj_id])
+            self.drawn_loadOBJ["region"][obj_id] = {}
+
+        try:
+            temp_selection_dict = {}
+            for e_id in self.region_loads[obj_id]["range"]:
+                drawn_item = self.draw_element_load(obj_id = f"{e_id}_{obj_id}",
+                                                    selection = selection,
+                                                    re_id = obj_id)
+                if selection:
+                    temp_selection_dict[e_id] = drawn_item
+                else:
+                    self.drawn_loadOBJ["region"][obj_id][e_id] = drawn_item
+
+            if selection:
+                ref_id = self.region_loads[obj_id]["reference_load"]
+                temp_selection_dict[ref_id] = self.draw_element_load(obj_id = ref_id,
+                                                                     selection = True,
+                                                                     re_id = obj_id,
+                                                                     reference_load = True)
+                self.drawnSelection_OBJ = temp_selection_dict
+
+        except Exception as e:
+            print(f"Error - drawing region load id {obj_id}:\n{e}")
+            # sprzątanie ewentualnych elementów narysowanych przed wystąpieniem błędu:
+            if selection:
+                if temp_selection_dict:
+                    self.canvas.remove_visualOBJ(temp_selection_dict)
+            else:
+                if self.drawn_loadOBJ["region"].get(obj_id): # zwróci none jak nie będzie obj_id
+                    self.canvas.remove_visualOBJ(self.drawn_loadOBJ["region"][obj_id])
+                self.drawn_loadOBJ["region"][obj_id] = {}
+
+            bg_color = "green" if selection else "white"
+            bg_alpha = 1.0 if selection else 0.8
+
+            label = self.canvas.axes.text(
+                0.5, 0.5,
+                f"Region Load '{obj_id}': Corrupted load data",
+                transform = self.canvas.axes.transAxes,
+                color = "red",
+                ha = 'center',
+                va = 'center',
+                fontsize = 14,
+                alpha = 1,
+                zorder = 100,
+                bbox = dict(
+                    boxstyle = 'round,pad=0.25',
+                    fc = bg_color,
+                    ec = 'red',
+                    alpha = bg_alpha
+                )
+            )
+
+            if selection:
+                self.drawnSelection_OBJ = {"error": label}
+            else:
+                self.drawn_loadOBJ["region"][obj_id] = {"error": label}
+
+        if draw:
+            self.canvas.draw()
+
+    # rysowanie obciążenia wielokątem
+    def draw_Polygon_region_load(self, obj_id, selection = False, draw = False):
+        # wymazywanie i inicjalizacja słownika tylko dla normalnego trybu (nie selekcji):
+        if not selection:
+            if obj_id in self.drawn_loadOBJ["region"]:
+                self.canvas.remove_visualOBJ(self.drawn_loadOBJ["region"][obj_id])
+            self.drawn_loadOBJ["region"][obj_id] = {}
+        
+        def draw_load(vis_dict):
+            polygon_points = self.region_loads[obj_id]["points_float"]
+            theta = self.region_loads[obj_id]["load_data"]["angle_rad"]
+
+            hatcher = PolygonArrowHatcher(polygon_points)
+            arrows = hatcher.get_arrows(theta = theta, num_lines = 20)
+
+            drawn_arrows = []
+            for pt_1, pt_2 in arrows:
+                new_arrow = self.draw_arrow(pt_1, pt_2, visual_dict = vis_dict, type = "hatch")
+                drawn_arrows.append(new_arrow)
+
+            # rysowanie obrysu:
+            polygon_lines_x = []
+            polygon_lines_z = []
+            for pt in self.region_loads[obj_id]["points_float"].values():
+                polygon_lines_x.append(pt[0])
+                polygon_lines_z.append(pt[1])
+            it = iter(self.region_loads[obj_id]["points_float"].values())
+            first_point = next(it)
+            second_point = next(it)
+            polygon_lines_x.append(first_point[0])
+            polygon_lines_z.append(first_point[1])
+            polygon_edge = self.canvas.axes.plot(polygon_lines_x, polygon_lines_z, linestyle = vis_dict["linestyle"], 
+                                                                                    linewidth = vis_dict["linewidth"], 
+                                                                                    color = vis_dict["color"], 
+                                                                                    alpha = vis_dict["transparency"])
+            if selection:
+                self.drawnSelection_OBJ = {"edge": polygon_edge, "hatch": drawn_arrows}
+                return
+            else:
+                label = self.canvas.axes.text((first_point[0] + second_point[0]) / 2, 
+                                              (first_point[1] + second_point[1]) / 2,
+                                                f"{obj_id}",
+                                                color = vis_dict["text_color"],
+                                                ha = 'center',  # wyśrodkowanie w poziomie
+                                                va = 'center',  # wyśrodkowanie w pionie
+                                                fontsize = vis_dict["text_size"],
+                                                alpha = vis_dict["text_transparency"],
+                                                bbox = dict(
+                                                        boxstyle = 'round,pad=0.15',
+                                                        fc = 'white',
+                                                        ec = 'none',
+                                                        alpha = vis_dict["textBOX_transparency"]))
+                self.drawn_loadOBJ["region"][obj_id] = {"edge": polygon_edge, "hatch": drawn_arrows, "label": label}
+
+        def draw_corrupt():
+            print(f"Error - drawing region load id {obj_id}:\n{e}")
+            # sprzątanie ewentualnych elementów narysowanych przed wystąpieniem błędu:
+            if selection:
+                self.draw_load_selection(cancel = True)
+            else:
+                if self.drawn_loadOBJ["region"].get(obj_id): # zwróci none jak nie będzie obj_id
+                    self.canvas.remove_visualOBJ(self.drawn_loadOBJ["region"][obj_id])
+                self.drawn_loadOBJ["region"][obj_id] = {}
+
+            bg_color = "green" if selection else "white"
+            bg_alpha = 1.0 if selection else 0.8
+
+            label = self.canvas.axes.text(
+                0.5, 0.5,
+                f"Region Load '{obj_id}': Corrupted load data",
+                transform = self.canvas.axes.transAxes,
+                color = "red",
+                ha = 'center',
+                va = 'center',
+                fontsize = 14,
+                alpha = 1,
+                zorder = 100,
+                bbox = dict(
+                    boxstyle = 'round,pad=0.25',
+                    fc = bg_color,
+                    ec = 'red',
+                    alpha = bg_alpha
+                )
+            )
+            if selection:
+                self.drawnSelection_OBJ = {"error": label}
+            else:
+                self.drawn_loadOBJ["region"][obj_id] = {"error": label}
+            
+        # bloki try/except:
+        if obj_id in self.usersOBJ_visuals["region"] and not selection:
+            vis_dict = self.usersOBJ_visuals["region"][obj_id]
+            region_transparency = vis_dict["region_transparency"]
+            vis_dict["transparency"] = region_transparency
+        elif selection:
+            vis_dict = self.get_selection_visual_dict()
+        else:
+            vis_dict = self.get_default_visual_dict()
+            region_transparency = vis_dict["region_transparency"]
+            vis_dict["transparency"] = region_transparency
+        try:
+            draw_load(vis_dict = vis_dict)
+        except Exception as e:
+            try:
+                print(f"Error - drawing region load id {obj_id}:\n{e} - trying default visual settings")
+                vis_dict = self.get_default_visual_dict()
+                region_transparency = vis_dict["region_transparency"]
+                vis_dict["transparency"] = region_transparency
+                draw_load(vis_dict = vis_dict)
+            except Exception as e:
+                vis_dict = self.get_default_visual_dict()
+                draw_corrupt()
+        
+        if draw:
+            self.canvas.draw()     
+        return
 
     # ====================================
+    # narzędzia walidacyjno konwersyjne:
+    
+    # Zbiorcza funkcja walidacji:
+    def MASTER_validate(self, full_validation = False, float_converter = False, return_flag = False):
+        master_flag = True
+        master_log = ["=================================================",
+                      "================= VALIDATING LOAD MESH ===============",
+                      "================================================="]
+        # walidacja słownika symboli:
+        if self.MainWindow.data_type == "symbolic":
+            flag, log = self.validate_load_symbol_subs(full_validation)
+            if flag is False:
+                master_flag = False
+            master_log.append("")
+            master_log.extend(log)
 
+        # walidacja słownika obciążeń węzłowych
+        flag, log, float_node_loads = self.validate_node_loads(full_validation, float_converter)
+        if flag is False:
+            master_flag = False
+        master_log.append("")
+        master_log.extend(log)
 
+        # walidacja słownika obciążeń elementów
+        flag, log, float_element_loads = self.validate_element_loads(full_validation, float_converter)
+        if flag is False:
+            master_flag = False
+        master_log.append("")
+        master_log.extend(log)
 
+        # walidacja słownika obciążeń regionalnych
+        flag, log, float_region_loads = self.validate_region_loads(full_validation, float_converter)
+        if flag is False:
+            master_flag = False
+        master_log.append("")
+        master_log.extend(log)
 
+        # sprawdzenie czy siatka nie jest pusta:
+        if not (self.node_loads or self.element_loads or self.region_loads):
+            master_flag = False
+            master_log.append("-- Load Mesh is empty --")
+
+        if master_flag is True:
+            master_log.extend(["", "======= MESH VALIDATION - Passed ======="])
+        else:
+            master_log.extend(["", "======= MESH VALIDATION - FAILED! ======="])
+
+        # Konwersja:
+        if float_converter and master_flag:
+            return {"node_loads": float_node_loads,
+                    "element_loads": float_element_loads,
+                    "region_loads": float_region_loads}
+        elif float_converter and not master_flag:
+            QMessageBox.critical(self.MainWindow, "Load Mesh failed validation",
+                                 "Corrupted load mesh cannot be converted to numerical format")
+
+        # Wwołanie dialogu:
+        dialog = ListReportLog(self.MainWindow, title = "Load Mesh validation", label_text = "validation log:", display_list = master_log, minimum_width = 500, minimum_height = 600)
+        dialog.exec()
+        if return_flag:
+            return master_flag
+        return
+
+    # walidacja symboli:
+    def validate_load_symbol_subs(self, full_validation = False):
+        flag = True
+        log = ["========= SYMBOL SUBSTITUTES VALIDATION ========="]
+        if self.load_symbol_substitutes == {}:
+            log.append("symbol substitute dict is empty, no problems occured")
+            return flag, log
+        try:
+            for sym_type, sym_dict in self.load_symbol_substitutes.items():
+                if full_validation:
+                    log.append(f"- checking - {sym_type} substitutes:")
+                try:
+                    for sym, sym_val in sym_dict.items():
+                        try:
+                            float(sym_val)
+                            if full_validation:
+                                log.append(f"{sym}: {sym_val}")
+                        except Exception:
+                            flag = False
+                            log.append(f"ERROR - {sym}: {sym_val} - unconvertable to float")
+                except Exception:
+                    flag = False
+                    log.append(f"Unable to process {sym_type} symbols container: \n found dict: {sym_dict}")
+        except Exception as e:
+            flag = False
+            log.append(f"Unable to process symbol substitute dict: \n{type(e).__name__}:{e}")
+        if flag is True:
+            log.append("=== No problems occured ===")
+        else:
+            log.append("=== FAILED VALIDATION! ===")
+
+        return flag, log
+
+    # walidacja obciążeń węzłowych:
+    def validate_node_loads(self, full_validation = False, float_converter = False) -> tuple[bool, list, bool] | tuple[bool, list, dict]:
+        flag = True
+        float_node_loads = {} if float_converter else False
+        subs_dict = {"X": "force",
+                     "Z": "force",
+                     "RY": "moment_of_force"}
+        log = ["========= NODE LOADS VALIDATION ========="]
+        if self.node_loads == {}:
+            log.append("node loads dict is empty, no problems occured")
+            return flag, log, float_node_loads
+        try:
+            for load_id, load_dict in self.node_loads.items():
+                if full_validation:
+                    log.append(f"- checking - Node Load: {load_id}:")
+                if float_converter:
+                    float_node_loads[load_id] = {}
+                try:
+                    for param, param_val in load_dict.items():
+                        abs_val, val_flag = self.validate_val(param_val, subs_dict[param], True)
+                        if not val_flag:
+                            flag = False
+                            log.append(f"ERROR - {param}: {param_val} - unconvertable to float")
+                        elif full_validation:
+                            log.append(f"{param} : absolute val = {abs_val}")
+                        if float_converter:   
+                            float_node_loads[load_id][param] = abs_val
+                except Exception:
+                    flag = False
+                    log.append(f"Unable to process {load_dict} Node Load container: \n found dict: {load_dict}")
+        except Exception as e:
+            flag = False
+            log.append(f"Unable to process Node Loads dict: \n{type(e).__name__}:{e}")
+        if flag is True:
+            log.append("=== No problems occured ===")
+        else:
+            log.append("=== FAILED VALIDATION! ===")
+
+        return flag, log, float_node_loads
+
+    # walidacja elementów:
+    def validate_element_loads(self, full_validation = False, float_converter = False) -> tuple[bool, list, bool] | tuple[bool, list, dict]:
+        flag = True
+        float_element_loads = {} if float_converter else False
+        subs_dict = {"axial_factor": "dimensionless",
+                    "normal_factor": "dimensionless",
+                    "L_angle": "angle",
+                    "Ax_factor": "dimensionless",
+                    "Norm_factor": "dimensionless",
+                    "t": "dimensionless",
+                    "val": "dimensionless",
+                    "base_intensity": "distributed_load"}
+        log = ["========= ELEMENT LOADS VALIDATION ========="]
+        if self.element_loads == {}:
+            log.append("element loads dict is empty, no problems occured")
+            return flag, log, float_element_loads
+        try:
+            for load_id, load_dict in self.element_loads.items():
+                if full_validation:
+                    log.append(f"- checking - Element Load: {load_id}:")
+                if float_converter:
+                    float_element_loads[load_id] = {}
+                try:
+                    # sprawdzanie origin: ================================================================
+                    if "origin" in load_dict:
+                        try:
+                            origin = load_dict["origin"]
+                            if origin is False:
+                                if full_validation:
+                                    log.append(f" - \"origin\" key is set to False, element load is not bounded to region load")
+                            elif origin.split("_")[0] == "ref":
+                                ref_region = origin.removeprefix("ref_")
+                            else:
+                                ref_region = origin
+                            if origin is not False:
+                                if ref_region in self.region_loads:
+                                    if full_validation:
+                                        log.append(f" - Element load region origin: {origin}, region load present in mesh")
+                                else:
+                                    flag = False
+                                    log.append(f"ERROR - {load_id}, unknown region origin: {origin}")
+                            if float_converter:
+                                float_element_loads[load_id]["origin"] = origin
+                        except Exception as e:
+                            flag = False
+                            log.append(f"ERROR - {load_id}, could not check region origin:\n{type(e).__name__}:{e}")
+                    else:
+                        flag = False
+                        log.append(f"ERROR - missing \"origin\" key for element load {load_id}\ntry applying changes in \"edit element dialog\" ")
+                    # srawdzenie loads data: ===============================================================
+                    if "load_data" in load_dict:
+                        if full_validation:
+                            log.append("---- checking \"load_data\"")
+                        if float_converter:
+                            float_element_loads[load_id]["load_data"] = {}
+                        try:
+                            for param, param_val in load_dict["load_data"].items():
+                                if param == "type":
+                                    if param_val in {"piecewise_linear", "polynomial_bezier", "constant"}:
+                                        if full_validation:
+                                            log.append(f" - Load distribution type: {param_val}") 
+                                    else:
+                                        flag = False
+                                        log.append(f"ERROR - Load id {load_id}, unknown distribution type: {param_val}")
+                                    if float_converter:
+                                        float_element_loads[load_id]["load_data"]["type"] = param_val
+                                elif param == "n_points":
+                                    if isinstance(param_val, int):
+                                        if full_validation:
+                                            log.append(f" - Load distribution type: {param_val}")
+                                        if float_converter:
+                                            float_element_loads[load_id]["load_data"]["n_points"] = param_val
+                                    else:
+                                        flag = False
+                                        log.append(f"ERROR - {load_id}, number of points {param_val} must be and integer number")
+                                elif param == "points":
+                                    if float_converter:
+                                        float_element_loads[load_id]["load_data"]["points"] = []
+                                    i = 1
+                                    for p_dict in param_val:
+                                        local_dict = {}
+                                        local_dict["t"], val_flag1 = self.validate_val(p_dict["t"], subs_dict["t"], flag = True, force_sympy = True)
+                                        local_dict["val"], val_flag2 = self.validate_val(p_dict["val"], subs_dict["val"], flag = True, force_sympy = True)
+                                        if False in {val_flag1, val_flag2}:
+                                            flag = False
+                                            log.append(f"ERROR - Load id {load_id} couldnt convert distibution point {i} to float\n {local_dict}")
+                                        else:
+                                            if full_validation:
+                                                log.append(f" - distribution point {i}: {local_dict}")
+                                            if float_converter:
+                                                float_element_loads[load_id]["load_data"]["points"].append(local_dict)
+                                        i += 1      
+                                else:
+                                    abs_val, val_flag = self.validate_val(param_val, subs_dict[param], flag = True)
+                                    if val_flag:
+                                        if full_validation:
+                                            log.append(f"- checked {param}, float value: {abs_val}")
+                                        if float_converter:
+                                            float_element_loads[load_id]["load_data"][param] = abs_val
+                                    else:
+                                        flag = False
+                                        log.append(f"ERROR - Load id: {load_id}, could not convert to float: {param}: {param_val}")
+                        except Exception as e:
+                            flag = False
+                            log.append(f"ERROR - {load_id}, cannot process \"load_data\" container:\n{type(e).__name__}:{e}")
+                    else:
+                        flag = False
+                        log.append(f"ERROR - {load_id}, missing \"load_data\" container")
+                    # srawdzenie intensity_settings: ===============================================================
+                    if "intensity_settings" in load_dict:
+                        if full_validation:
+                            log.append("---- checking \"intensity_settings\"")
+                        if float_converter:
+                            float_element_loads[load_id]["intensity_settings"] = {}
+                        try:
+                            for in_param, in_val in load_dict["intensity_settings"].items():
+                                if in_param == "d_type":
+                                    if float_converter:
+                                        float_element_loads[load_id]["intensity_settings"][in_param] = in_val
+                                else:
+                                    abs_val, val_flag = self.validate_val(in_val, subs_dict[in_param], flag = True)
+                                    if val_flag:
+                                        if full_validation:
+                                            log.append(f"- checked {in_param}, float value: {abs_val}")
+                                        if float_converter:
+                                            float_element_loads[load_id]["intensity_settings"][in_param] = abs_val
+                                    else:
+                                        flag = False
+                                        log.append(f"ERROR - Load id: {load_id}, could not convert to float: {in_param}: {in_val}")
+                        except Exception as e:
+                            flag = False
+                            log.append(f"An ERROR occured while checking \"intensity_settings\":\n{type(e).__name__}:{e}")
+                    if "drawing_points" in load_dict and float_converter:
+                        try:
+                            float_element_loads[load_id]["drawing_points"] = {"x": load_dict["drawing_points"]["x"],
+                                                                              "z": load_dict["drawing_points"]["z"]}
+                        except Exception:
+                            pass
+                except Exception as e:
+                    flag = False
+                    log.append(f"Unable to process {load_dict} Element Load container: \n found dict: {load_dict}\n{type(e).__name__}:{e}")
+        except Exception as e:
+            flag = False
+            log.append(f"Unable to process Element Loads dict: \n {type(e).__name__}:{e}")
+        if flag is True:
+            log.append("=== No problems occured ===")
+        else:
+            log.append("=== FAILED VALIDATION! ===")
+
+        return flag, log, float_element_loads
+        
+    # walidacja regionów:
+    def validate_region_loads(self, full_validation = False, float_converter = False) -> tuple[bool, list, bool] | tuple[bool, list, dict]:
+        flag = True
+        float_region_loads = {} if float_converter else False
+        subs_dict = {"intensity": "distributed_load",
+                    "angle": "angle",
+                    "angle_rad": "angle",
+                    "x_factor": "dimensionless",
+                    "z_factor": "dimensionless",
+                    "projection_factor": "dimensionless"}
+        log = ["========= REGION LOADS VALIDATION ========="]
+        if self.region_loads == {}:
+            log.append("Region loads dict is empty, no problems occured")
+            return flag, log, float_region_loads
+        try:
+            for load_id, load_dict in self.region_loads.items():
+                if full_validation:
+                    log.append(f"- checking - Region Load: {load_id}:")
+                if float_converter:
+                    float_region_loads[load_id] = {}
+                # sprawdzanie list obciążeń:
+                if "range" in load_dict:
+                    el_list = load_dict["range"]
+                    if not el_list:
+                        flag = False
+                        log.append(f"ERROR - Invalid target element list: {el_list}")
+                    else:
+                        try:
+                            load_list = [f"{e_id}_{load_id}" for e_id in el_list]
+                            for el_load_id in load_list:
+                                if el_load_id in self.element_loads:
+                                    if full_validation:
+                                        log.append(f" - checked, element load {el_load_id} is present in element load dict")
+                                else:
+                                    flag = False
+                                    log.append(f"ERROR - Load id {load_id}: element load {el_load_id} is NOT present in element load dict")
+                        except Exception as e:
+                            flag = False
+                            log.append(f"ERROR - Load id {load_id}, could not check target element list\n{type(e).__name__}:{e}")
+                    if float_converter:
+                        float_region_loads[load_id]["range"] = el_list
+                else:
+                    flag = False
+                    log.append(f"ERROR - Load id {load_id}, Region load does not contain target elements list")
+                # sprawdzanie inherit_load ===============================================
+                if load_dict["method"] == "inherit_load":
+                    if float_converter:
+                        float_region_loads[load_id]["method"] = "inherit_load"
+                    if full_validation:
+                        log.append(f"- checking - inherit_load method:")
+                    # sprawdzenie reference_load:
+                    if "reference_load" in load_dict:
+                        ref_load = load_dict["reference_load"]
+                        if ref_load in self.element_loads:
+                            origin = self.element_loads[ref_load]["origin"]
+                            if origin.removeprefix("ref_") == load_id:
+                                if full_validation:
+                                    log.append(f" - checked \"origin\" in element load {ref_load} - {origin}")
+                                if float_converter:
+                                    float_region_loads[load_id]["reference_load"] = ref_load
+                            else:
+                                flag = False
+                                log.append(f"ERROR - Load id {load_id}, reference load \"origin\" property does not mathe region\n region id:{load_id}, element: {origin}")
+                        else:
+                            flag = False
+                            log.append(f"ERROR - Load id {load_id}, reference load {ref_load} is not present in element loads dict")
+                    else:
+                        flag = False
+                        log.append(f"ERROR - Load id: {load_id}, reference load is not assigned")
+                # sprawdzanie closed_contour =============================================== 
+                elif load_dict["method"] == "closed_contour":
+                    if full_validation:
+                        log.append(f"- checking - closed_contour method:")
+                    if float_converter:
+                        float_region_loads[load_id]["method"] = "closed_contour"
+                    if "load_data" in load_dict:
+                        if full_validation:
+                            log.append(f"--- checking load_data:")
+                        if float_converter:
+                            float_region_loads[load_id]["load_data"] = {}
+                        try:
+                            for load_param, load_val in load_dict["load_data"].items():
+                                if load_param == "projection_func":
+                                    if load_val in {"cosinusoidal", "linear", "hyperbolic"}:
+                                        if full_validation:
+                                            log.append(f" - checking: projection_func: {load_val} is supported")
+                                        if float_converter:
+                                            float_region_loads[load_id]["load_data"][load_param] = load_val
+                                    else:
+                                        flag = False
+                                        log.append(f"ERROR - Load id {load_id}: projection_func: {load_val} is NOT supported")
+                                    continue
+                                abs_val, val_flag = self.validate_val(load_val, subs_dict[load_param], flag = True)
+                                if val_flag:
+                                    if full_validation:
+                                        log.append(f" - checking - {load_param}, absolute value: {abs_val}")
+                                    if float_converter:
+                                        float_region_loads[load_id]["load_data"][load_param] = abs_val
+                                else:
+                                    flag = False
+                                    log.append(f"ERROR - Load id {load_id}: could not convert {load_param} to float ({load_val})")
+                        except Exception as e:
+                            flag = False
+                            log.append(f"ERROR - Load id {load_id}, unable to verify load_data\n{type(e).__name__}:{e}")    
+                    else:
+                        flag = False
+                        log.append(f"ERROR - Load id {load_id}: Region load does not contain \"load_data\"")
+
+                    if "points" in load_dict:
+                        if full_validation:
+                            log.append(f"--- checking polygon points coordinates:")
+                        if float_converter:
+                            float_region_loads[load_id]["points"] = {}
+                        try:
+                            for n_pt, pt_list in load_dict["points"].items():
+                                local_list = [None] * 2
+                                local_list[0], val_flag1 = self.validate_val(pt_list[0], "length", flag = True)
+                                local_list[1], val_flag2 = self.validate_val(pt_list[1], "length", flag = True)
+                                if False in {val_flag1, val_flag2}:
+                                    flag = False
+                                    log.append(f"ERROR - Load id {load_id}: unable to convert point {n_pt} [{pt_list[0]}, {pt_list[1]}] to float")
+                                else:
+                                    if full_validation:
+                                        log.append(f"- checking point {n_pt}: [{pt_list[0]}, {pt_list[1]}], absolute val: [{local_list[0]}, {local_list[1]}]")
+                                    if float_converter:
+                                        float_region_loads[load_id]["points"][n_pt] = local_list
+                        except Exception as e:
+                            flag = False
+                            log.append(f"ERROR - Load id {load_id}, unable to verify polygon points\n{type(e).__name__}:{e}")                    
+                    else:
+                        flag = False
+                        log.append(f"ERROR - Load id {load_id}: Region load does not contain polygon \"points\"")
+                    if "points_float" in load_dict and float_converter:
+                        float_region_loads[load_id]["points_float"] = load_dict["points_float"]
+                elif "method" not in load_dict or load_dict["method"] not in {"inherit_load", "closed_contour"}:
+                    flag = False
+                    log.append(f"ERROR - Load id {load_id}: Unknown region load \"method\"")
+
+        except Exception as e:
+            flag = False
+            log.append(f"Unable to process Region Loads dict: \n{type(e).__name__}:{e}")
+        if flag is True:
+            log.append("=== No problems occured ===")
+        else:
+            log.append("=== FAILED VALIDATION! ===")
+
+        return flag, log, float_region_loads   
+    # ====================================
 
 
 # ====================================================================================
@@ -4332,13 +6116,15 @@ class MeshManagerDialog(QDialog):
 # Dialog okna walidacji siatki
 # ======================================== EDYTOR SIATKI
 class ValidationDialog(QDialog):
-    def __init__(self, parent = None, canvas = None):
+    def __init__(self, parent = None, canvas = None, LoadsCore = None, load_flag: bool = False):
         super().__init__(parent)
 
         self.MainWindow = parent
         self.canvas = canvas
         self.setWindowTitle("Validation setup")
         self.setModal(True)
+        self.LoadsCore = LoadsCore
+        self.load_flag = load_flag
 
         main_layout = QVBoxLayout(self)
         main_layout.addWidget(QLabel("Choose reporting type: "))
@@ -4354,6 +6140,8 @@ class ValidationDialog(QDialog):
         self.check_full.setChecked(True)
         main_layout.addStretch()
         apply_btn = QPushButton("start mesh validation")
+        if self.load_flag:
+            apply_btn.setText("start load mesh validation")
         main_layout.addWidget(apply_btn)
         apply_btn.clicked.connect(self.start_validation)
 
@@ -4362,7 +6150,10 @@ class ValidationDialog(QDialog):
             full_raport = True
         elif self.check_error.isChecked():
             full_raport = False
-        self.canvas.MASTER_validate(full_validation = full_raport)
+        if self.load_flag:
+            self.LoadsCore.MASTER_validate(full_validation = full_raport)
+        else:
+            self.canvas.MASTER_validate(full_validation = full_raport)
         self.accept()
 
 
@@ -4610,12 +6401,15 @@ class CanvasOptionsDialog(QDialog):
         apply_btn = QPushButton("Apply changes")
         close_save_btn = QPushButton("Save an exit")
         refresh_canvas_btn = QPushButton("Refresh canvas")
+        reset_to_default_btn = QPushButton("Restore to Default")
         H_layout.addWidget(apply_btn)
         H_layout.addWidget(refresh_canvas_btn)
+        H_layout.addWidget(reset_to_default_btn)
         H_layout.addWidget(close_save_btn)
         apply_btn.clicked.connect(self.apply_changes)
         refresh_canvas_btn.clicked.connect(self.refresh_canvas)
         close_save_btn.clicked.connect(self.close_save_dialog)
+        reset_to_default_btn.clicked.connect(self.reset_to_default)
 
     # Funkcje wyświetlające widgety
     def set_aspect_widget(self):
@@ -4722,11 +6516,11 @@ class CanvasOptionsDialog(QDialog):
 
     # dodatkowe funkcje na potrzeby edytora obciążeń:
     def loads_canvas_GUI(self):
-        main_layout = QHBoxLayout()
+        self.main_loads_layout = QHBoxLayout()
         left_lt = QVBoxLayout()
         right_lt = QVBoxLayout()
-        main_layout.addLayout(left_lt)
-        main_layout.addLayout(right_lt)
+        self.main_loads_layout.addLayout(left_lt)
+        self.main_loads_layout.addLayout(right_lt)
 
 
         Load_label = QLabel("Load mesh default visuals")
@@ -4738,49 +6532,49 @@ class CanvasOptionsDialog(QDialog):
         local_scale_lt = QHBoxLayout()
         left_lt.addLayout(local_scale_lt)
         local_scale_lt.addWidget(QLabel("Loads scaling: "))
-        self.Load_scale = QLineEdit(f"{self.canvas.load_mesh_visual_settings["load_scale"]}")
+        self.Load_scale = QLineEdit(f"{self.LoadsCore.LoadsVisaul_dict["load_scale"]}")
         local_scale_lt.addWidget(self.Load_scale)
         local_scale_lt.addStretch()
 
         self.Load_color = self.make_combobox_lt(left_lt, "Load mesh - color: ", 
                                                     ["black", "blue", "green", "red", "gray", "pink"],
-                                                    current_item = str(self.canvas.load_mesh_visual_settings["loads_color"]))
+                                                    current_item = str(self.LoadsCore.LoadsVisaul_dict["loads_color"]))
         self.Load_transparency = self.make_combobox_lt(left_lt, "Load mesh - transparency: ", 
                                                     ["0", "0.1", "0.25", "0.5", "0.75", "1.0"],
-                                                    current_item = str(self.canvas.load_mesh_visual_settings["loads_transparency"]))
+                                                    current_item = str(self.LoadsCore.LoadsVisaul_dict["loads_transparency"]))
         self.Load_thicc = self.make_combobox_lt(left_lt, "Load mesh - thick line thickness: ", 
                                                     ["0.25", "0.5", "0.75", "1", "1.25", "1.5", "1.75", "2", "3", "4", "5"],
-                                                    current_item = str(self.canvas.load_mesh_visual_settings["thicc_line"]))
+                                                    current_item = str(self.LoadsCore.LoadsVisaul_dict["thicc_line"]))
         self.Load_thinn = self.make_combobox_lt(left_lt, "Load mesh - thinn line thickness: ", 
                                                     ["0.25", "0.5", "0.75", "1", "1.25", "1.5", "1.75", "2"],
-                                                    current_item = str(self.canvas.load_mesh_visual_settings["thinn_line"]))
+                                                    current_item = str(self.LoadsCore.LoadsVisaul_dict["thinn_line"]))
         self.Load_linestyle = self.make_combobox_lt(left_lt, "Load mesh - linestyle: ", 
                                                     ['-', '--', '-.', ':'],
-                                                    current_item = str(self.canvas.load_mesh_visual_settings["loads_linestyle"]))
+                                                    current_item = str(self.LoadsCore.LoadsVisaul_dict["loads_linestyle"]))
         self.Load_text_size = self.make_combobox_lt(left_lt, "Load mesh - font size: ", 
                                                     ["0", "2", "6", "8", "10", "12", "14", "16", "18", "20"],
-                                                    current_item = str(self.canvas.load_mesh_visual_settings["text_size"]))
+                                                    current_item = str(self.LoadsCore.LoadsVisaul_dict["text_size"]))
         self.Load_text_color = self.make_combobox_lt(left_lt, "Load mesh - text color: ", 
                                                     ["black", "blue", "green", "red", "gray", "pink"],
-                                                    current_item = str(self.canvas.load_mesh_visual_settings["text_color"]))
+                                                    current_item = str(self.LoadsCore.LoadsVisaul_dict["text_color"]))
         self.Load_text_transparency = self.make_combobox_lt(left_lt, "Load mesh - text transparency: ", 
                                                     ["0", "0.1", "0.25", "0.5", "0.75", "1.0"],
-                                                    current_item = str(self.canvas.load_mesh_visual_settings["text_transparency"]))
+                                                    current_item = str(self.LoadsCore.LoadsVisaul_dict["text_transparency"]))
         self.Load_textBOX_transparency = self.make_combobox_lt(left_lt, "Load mesh - textBOX_transparency: ", 
                                                     ["0", "0.1", "0.25", "0.5", "0.6", "0.75", "1.0"],
-                                                    current_item = str(self.canvas.load_mesh_visual_settings["textBOX_transparency"]))
+                                                    current_item = str(self.LoadsCore.LoadsVisaul_dict["textBOX_transparency"]))
         self.Load_selection_thickness = self.make_combobox_lt(left_lt, "Load mesh - selection thickness: ", 
                                                     ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "12", "14", "16"],
-                                                    current_item = str(self.canvas.load_mesh_visual_settings["selection_thickness"]))
+                                                    current_item = str(self.LoadsCore.LoadsVisaul_dict["selection_thickness"]))
         self.Load_selection_color = self.make_combobox_lt(left_lt, "Load mesh - selection color: ", 
                                                     ["black", "blue", "green", "red", "gray", "pink"],
-                                                    current_item = str(self.canvas.load_mesh_visual_settings["selection_color"]))
+                                                    current_item = str(self.LoadsCore.LoadsVisaul_dict["selection_color"]))
         self.Load_selection_transparency = self.make_combobox_lt(left_lt, "Load mesh - selection transparency: ", 
                                                     ["0", "0.1", "0.25", "0.5", "0.75", "1.0"],
-                                                    current_item = str(self.canvas.load_mesh_visual_settings["selection_transparency"]))
+                                                    current_item = str(self.LoadsCore.LoadsVisaul_dict["selection_transparency"]))
         self.Load_region_transparency = self.make_combobox_lt(left_lt, "Load mesh - Region load transparency: ", 
                                                     ["0", "0.1", "0.25", "0.5", "0.75", "1.0"],
-                                                    current_item = str(self.canvas.load_mesh_visual_settings["region_transparency"]))
+                                                    current_item = str(self.LoadsCore.LoadsVisaul_dict["region_transparency"]))
         left_lt.addStretch()
         
         simple_label = QLabel("Simplified mesh theme settings")
@@ -4791,30 +6585,54 @@ class CanvasOptionsDialog(QDialog):
         right_lt.addWidget(simple_label)
         self.simple_linestyle = self.make_combobox_lt(right_lt, "Linestyle", 
                                                     ['--', '-', '-.', ':'],
-                                                    current_item = str(self.canvas.load_mesh_visual_settings["simplified_element_linestyle"]))
+                                                    current_item = str(self.LoadsCore.LoadsVisaul_dict["simplified_element_linestyle"]))
         self.simple_linewidth = self.make_combobox_lt(right_lt, "Line thickness", 
                                                     ["0.25", "0.5", "0.75", "1", "1.25", "1.5", "1.75", "2", "3", "4", "5"],
-                                                    current_item = str(self.canvas.load_mesh_visual_settings["simplified_element_linewidth"]))
+                                                    current_item = str(self.LoadsCore.LoadsVisaul_dict["simplified_element_linewidth"]))
         self.simple_color = self.make_combobox_lt(right_lt, "Mesh color", 
                                                     ["black", "blue", "green", "red", "gray", "pink"],
-                                                    current_item = str(self.canvas.load_mesh_visual_settings["simplified_mesh_color"]))
+                                                    current_item = str(self.LoadsCore.LoadsVisaul_dict["simplified_mesh_color"]))
         self.simple_transparency = self.make_combobox_lt(right_lt, "Mesh transparency", 
                                                     ["0", "0.25", "0.5", "0.75", "1.0"],
-                                                    current_item = str(self.canvas.load_mesh_visual_settings["simplified_mesh_transparency"]))
+                                                    current_item = str(self.LoadsCore.LoadsVisaul_dict["simplified_mesh_transparency"]))
         self.simple_node_size = self.make_combobox_lt(right_lt, "Node-mark size", 
                                                     ["0.5", "1.0", "1.5", "2.0", "2.5", "3.0", "4.0", "5.0", "6.0", "7.0", "8.5", "10.0", "12.0", "14.0", "16.0"],
-                                                    current_item = str(self.canvas.load_mesh_visual_settings["simplified_node_size"]))
+                                                    current_item = str(self.LoadsCore.LoadsVisaul_dict["simplified_node_size"]))
         self.simple_label_size = self.make_combobox_lt(right_lt, "Label text size", 
                                                     ["0", "1.0", "1.5", "2.0", "2.5", "3.0", "4.0", "5.0", "6.0", "7.0", "8.5", "10.0"],
-                                                    current_item = str(self.canvas.load_mesh_visual_settings["simplified_label_size"]))                              
+                                                    current_item = str(self.LoadsCore.LoadsVisaul_dict["simplified_label_size"]))                              
         self.simple_draw_label = self.make_combobox_lt(right_lt, "Node/Element labels: ", 
                                                     ["Show", "Hide"],
-                                                    current_item = str(self.canvas.load_mesh_visual_settings["draw_labels"]))
+                                                    current_item = str(self.LoadsCore.LoadsVisaul_dict["draw_labels"]))
         right_lt.addStretch()
 
-        self.main_layout.addLayout(main_layout)
+        self.main_layout.insertLayout(3, self.main_loads_layout)
         return
 
+    # resetowanie do domyślnych:
+    def reset_to_default(self):
+        def clear_layout(layout):
+                    if layout is None:
+                        return  
+                    while layout.count():
+                        item = layout.takeAt(0) # takeAt(0) prawidłowo usuwa element z layoutu
+                        widget = item.widget()
+                        sub_layout = item.layout() 
+                        if widget:
+                            widget.deleteLater()
+                        elif sub_layout:
+                            clear_layout(sub_layout)
+                        else:
+                            # Jeśli to nie widget i nie layout, to jest to np. QSpacerItem
+                            del item
+        
+        if self.load_mesh_flag:
+            self.LoadsCore.LoadsVisaul_dict = copy.deepcopy(self.canvas.load_mesh_default_visual_settings)
+            self.LoadsCore.usersOBJ_visuals["canvas_settings"] = copy.deepcopy(self.LoadsCore.LoadsVisaul_dict)
+            clear_layout(self.main_loads_layout)
+            self.loads_canvas_GUI()
+        self.canvas.canvas_settings_dict = copy.deepcopy(self.canvas.canvas_default_settings)
+         
     def save_loads_dicts(self):
         if self.load_mesh_flag:
             try:
@@ -4822,35 +6640,36 @@ class CanvasOptionsDialog(QDialog):
                 if not scale > 0:
                     QMessageBox.warning(self, "Invalid value", "Loads scale must be a positive float number.")
                 else:
-                    self.canvas.load_mesh_visual_settings["load_scale"] = scale
+                    self.LoadsCore.LoadsVisaul_dict["load_scale"] = scale
             except Exception:
                 QMessageBox.warning(self, "Invalid value", "Loads scale must be a positive float number.")
-            self.canvas.load_mesh_visual_settings["loads_color"] = self.Load_color.currentText()
-            self.canvas.load_mesh_visual_settings["loads_transparency"] = float(self.Load_transparency.currentText())
-            self.canvas.load_mesh_visual_settings["thicc_line"] = float(self.Load_thicc.currentText())
-            self.canvas.load_mesh_visual_settings["thinn_line"] = float(self.Load_thinn.currentText())
-            self.canvas.load_mesh_visual_settings["loads_linestyle"] = self.Load_linestyle.currentText()
-            self.canvas.load_mesh_visual_settings["text_size"] = float(self.Load_text_size.currentText())
-            self.canvas.load_mesh_visual_settings["text_color"] = self.Load_text_color.currentText()
-            self.canvas.load_mesh_visual_settings["text_transparency"] = float(self.Load_text_transparency.currentText())
-            self.canvas.load_mesh_visual_settings["textBOX_transparency"] = float(self.Load_textBOX_transparency.currentText())
-            self.canvas.load_mesh_visual_settings["selection_thickness"] = float(self.Load_selection_thickness.currentText())
-            self.canvas.load_mesh_visual_settings["selection_color"] = self.Load_selection_color.currentText()
-            self.canvas.load_mesh_visual_settings["selection_transparency"] = float(self.Load_selection_transparency.currentText())
-            self.canvas.load_mesh_visual_settings["region_transparency"] = float(self.Load_region_transparency.currentText())
+            self.LoadsCore.LoadsVisaul_dict["loads_color"] = self.Load_color.currentText()
+            self.LoadsCore.LoadsVisaul_dict["loads_transparency"] = float(self.Load_transparency.currentText())
+            self.LoadsCore.LoadsVisaul_dict["thicc_line"] = float(self.Load_thicc.currentText())
+            self.LoadsCore.LoadsVisaul_dict["thinn_line"] = float(self.Load_thinn.currentText())
+            self.LoadsCore.LoadsVisaul_dict["loads_linestyle"] = self.Load_linestyle.currentText()
+            self.LoadsCore.LoadsVisaul_dict["text_size"] = float(self.Load_text_size.currentText())
+            self.LoadsCore.LoadsVisaul_dict["text_color"] = self.Load_text_color.currentText()
+            self.LoadsCore.LoadsVisaul_dict["text_transparency"] = float(self.Load_text_transparency.currentText())
+            self.LoadsCore.LoadsVisaul_dict["textBOX_transparency"] = float(self.Load_textBOX_transparency.currentText())
+            self.LoadsCore.LoadsVisaul_dict["selection_thickness"] = float(self.Load_selection_thickness.currentText())
+            self.LoadsCore.LoadsVisaul_dict["selection_color"] = self.Load_selection_color.currentText()
+            self.LoadsCore.LoadsVisaul_dict["selection_transparency"] = float(self.Load_selection_transparency.currentText())
+            self.LoadsCore.LoadsVisaul_dict["region_transparency"] = float(self.Load_region_transparency.currentText())
 
-            self.canvas.load_mesh_visual_settings["simplified_element_linestyle"] = self.simple_linestyle.currentText()
-            self.canvas.load_mesh_visual_settings["simplified_element_linewidth"] = float(self.simple_linewidth.currentText())
-            self.canvas.load_mesh_visual_settings["simplified_mesh_color"] = self.simple_color.currentText()
-            self.canvas.load_mesh_visual_settings["simplified_mesh_transparency"] = float(self.simple_transparency.currentText())
-            self.canvas.load_mesh_visual_settings["simplified_node_size"] = float(self.simple_node_size.currentText())
-            self.canvas.load_mesh_visual_settings["simplified_label_size"] = float(self.simple_label_size.currentText())
-            self.canvas.load_mesh_visual_settings["draw_labels"] = self.simple_draw_label.currentText()
+            self.LoadsCore.LoadsVisaul_dict["simplified_element_linestyle"] = self.simple_linestyle.currentText()
+            self.LoadsCore.LoadsVisaul_dict["simplified_element_linewidth"] = float(self.simple_linewidth.currentText())
+            self.LoadsCore.LoadsVisaul_dict["simplified_mesh_color"] = self.simple_color.currentText()
+            self.LoadsCore.LoadsVisaul_dict["simplified_mesh_transparency"] = float(self.simple_transparency.currentText())
+            self.LoadsCore.LoadsVisaul_dict["simplified_node_size"] = float(self.simple_node_size.currentText())
+            self.LoadsCore.LoadsVisaul_dict["simplified_label_size"] = float(self.simple_label_size.currentText())
+            self.LoadsCore.LoadsVisaul_dict["draw_labels"] = self.simple_draw_label.currentText()
             self.LoadsCore.draw_load_mesh()
             if self.canvas.simple_mesh_flag:
                 self.canvas.clear_mesh()
                 self.canvas.draw_simple_mesh()
                 self.LoadsCore.draw_load_mesh()
+            self.LoadsCore.usersOBJ_visuals["canvas_settings"] = copy.deepcopy(self.LoadsCore.LoadsVisaul_dict)
             return
         else:
             return
@@ -6895,6 +8714,7 @@ class SymbolSubstitutesDialog(QDialog):
     def close_dialog(self):
         self.accept()
 
+
 # ========================================
 # Dialog Edycji Materiałów
 # ======================================== EDYTOR SIATKI
@@ -8843,47 +10663,6 @@ class SectionManager(QDialog):
         self.accept()
         
 # ========================================
-# Klasa dialogu pomocniczego canvasa:
-# ======================================== EDYTOR SIATKI
-class AuxilaryCanvas(FigureCanvas):
-    def __init__(self, parent = None, width = 3, height = 3, dpi = 100):
-        self.fig = Figure(figsize = (width, height), dpi = dpi)
-        super().__init__(self.fig)          
-        self.setParent(parent)              
-        self.axes = self.fig.add_subplot(1, 1, 1)
-        self.axes.set_aspect("equal")
-        self.axes.clear()
-
-# ========================================
-# Klasa dialogu Logów rysowania siatki
-# ======================================== EDYTOR SIATKI
-class ListReportLog(QDialog):
-    def __init__(self, parent = None, canvas = None, title = "No title", label_text = "Report:",  display_list = "No list", minimum_width = 400, minimum_height = 400):
-        super().__init__(parent)
-        self.canvas = canvas
-        # Ustawienia interakcji:
-        self.setModal(False)
-        self.setWindowTitle(title)
-        self.setMinimumWidth(minimum_width)
-        self.setMinimumHeight(minimum_height)
-        # Layouty:
-        self.main_layout = QVBoxLayout(self) # Główny layout, po to aby przyciski dolne były zawsze w tym samym miejscu
-        # Dodawanie Listy:
-        label = QLabel(f"{label_text}")
-        self.main_layout.addWidget(label)
-        Log_list = QListWidget()
-        Log_list.addItems(display_list)
-        self.main_layout.addWidget(Log_list)
-
-        # Dolna sekcja:
-        close_btn = QPushButton("close")
-        self.main_layout.addWidget(close_btn)
-        close_btn.clicked.connect(self.close_dialog)
-
-    def close_dialog(self):
-        self.accept()
-
-# ========================================
 # Klasa rysowania siatki
 # ======================================== EDYTOR SIATKI + POST PROCESSOR + EDYTOR OBCIĄŻEŃ
 class MeshCanvas(FigureCanvas):
@@ -8912,7 +10691,7 @@ class MeshCanvas(FigureCanvas):
 
         # Słownik prostego rysowania siatki - dla managera symboli:
         # Funkcja rysująca elementy jako połączone linie, tylko dla edytora obciążeń:
-        self.load_mesh_visual_settings = {
+        self.load_mesh_default_visual_settings = {
             "load_scale": 2000,
             "loads_color": "gray",
             "loads_transparency": 1.0,
@@ -11931,21 +13710,21 @@ class MeshCanvas(FigureCanvas):
     # ======================================================================= FUNKCJE EDYTORA OBCIĄŻEŃ
     def draw_simple_node(self, n_id):
         x, z, no_coords_flag = self.get_node_coordinates(n_id, MessageBox = False, log = False)
-        marker = self.axes.plot(x, z, marker = self.load_mesh_visual_settings["node_marker"][self.map_node_constraints(n_id, MessageBox = False, log = False)],
-                                color = self.load_mesh_visual_settings["simplified_mesh_color"],
-                                markersize = self.load_mesh_visual_settings["simplified_node_size"],
-                                alpha = self.load_mesh_visual_settings["simplified_mesh_transparency"],
+        marker = self.axes.plot(x, z, marker = self.load_mesh_default_visual_settings["node_marker"][self.map_node_constraints(n_id, MessageBox = False, log = False)],
+                                color = self.load_mesh_default_visual_settings["simplified_mesh_color"],
+                                markersize = self.load_mesh_default_visual_settings["simplified_node_size"],
+                                alpha = self.load_mesh_default_visual_settings["simplified_mesh_transparency"],
                                 linestyle = 'None')
-        if self.load_mesh_visual_settings["draw_labels"] == "Show":
-            if self.load_mesh_visual_settings["simplified_mesh_transparency"] + 0.2 < 1:
-                transparency = self.load_mesh_visual_settings["simplified_mesh_transparency"] + 0.2
+        if self.load_mesh_default_visual_settings["draw_labels"] == "Show":
+            if self.load_mesh_default_visual_settings["simplified_mesh_transparency"] + 0.2 < 1:
+                transparency = self.load_mesh_default_visual_settings["simplified_mesh_transparency"] + 0.2
             else:
-                transparency = self.load_mesh_visual_settings["simplified_mesh_transparency"]
+                transparency = self.load_mesh_default_visual_settings["simplified_mesh_transparency"]
 
             label = self.axes.text(x, z, f"n_{n_id}",
-                                color = self.load_mesh_visual_settings["simplified_mesh_color"],
-                                fontsize = self.load_mesh_visual_settings["simplified_label_size"],
-                                alpha = self.load_mesh_visual_settings["simplified_mesh_transparency"],
+                                color = self.load_mesh_default_visual_settings["simplified_mesh_color"],
+                                fontsize = self.load_mesh_default_visual_settings["simplified_label_size"],
+                                alpha = self.load_mesh_default_visual_settings["simplified_mesh_transparency"],
                                 bbox = dict(
                                         boxstyle = 'round,pad=0.15',
                                         fc = 'white',
@@ -11955,21 +13734,21 @@ class MeshCanvas(FigureCanvas):
     def draw_simple_element(self, e_id):
         x_1, z_1, x_2, z_2, L, theta, no_node_flag = self.get_element_vector(e_id, MessageBox = False, log = False)
         line = self.axes.plot([x_1, x_2], [z_1, z_2],
-                                linewidth = self.load_mesh_visual_settings["simplified_element_linewidth"],
-                                color = self.load_mesh_visual_settings["simplified_mesh_color"],
-                                alpha = self.load_mesh_visual_settings["simplified_mesh_transparency"],
-                                linestyle  = self.load_mesh_visual_settings["simplified_element_linestyle"]) 
-        if self.load_mesh_visual_settings["draw_labels"] == "Show":
-            if self.load_mesh_visual_settings["simplified_mesh_transparency"] + 0.2 < 1:
-                transparency = self.load_mesh_visual_settings["simplified_mesh_transparency"] + 0.2
+                                linewidth = self.load_mesh_default_visual_settings["simplified_element_linewidth"],
+                                color = self.load_mesh_default_visual_settings["simplified_mesh_color"],
+                                alpha = self.load_mesh_default_visual_settings["simplified_mesh_transparency"],
+                                linestyle  = self.load_mesh_default_visual_settings["simplified_element_linestyle"]) 
+        if self.load_mesh_default_visual_settings["draw_labels"] == "Show":
+            if self.load_mesh_default_visual_settings["simplified_mesh_transparency"] + 0.2 < 1:
+                transparency = self.load_mesh_default_visual_settings["simplified_mesh_transparency"] + 0.2
             else:
-                transparency = self.load_mesh_visual_settings["simplified_mesh_transparency"]
+                transparency = self.load_mesh_default_visual_settings["simplified_mesh_transparency"]
             x = (x_2 + x_1) / 2
             z = (z_2 + z_1) / 2
             label = self.axes.text(x, z, f"e_{e_id}",
-                                   color = self.load_mesh_visual_settings["simplified_mesh_color"],
-                                   fontsize = self.load_mesh_visual_settings["simplified_label_size"],
-                                   alpha = self.load_mesh_visual_settings["simplified_mesh_transparency"],
+                                   color = self.load_mesh_default_visual_settings["simplified_mesh_color"],
+                                   fontsize = self.load_mesh_default_visual_settings["simplified_label_size"],
+                                   alpha = self.load_mesh_default_visual_settings["simplified_mesh_transparency"],
                                    bbox = dict(
                                            boxstyle = 'round,pad=0.15',
                                            fc = 'white',
